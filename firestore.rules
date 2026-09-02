@@ -1,0 +1,722 @@
+rules_version = '2';
+
+/* ============================================================================
+   VAZIONIX — FIRESTORE SECURITY RULES
+   ============================================================================
+
+   WHY THIS FILE IS SHAPED LIKE A DENY LIST
+   ----------------------------------------
+   The browser bundle uses the Firestore client SDK for exactly ONE thing: a
+   realtime listener on the signed-in user's own profile. See
+   `src/components/providers/SessionProvider.tsx` — it calls
+   `onSnapshot(doc(db, 'users', uid))`, and that is the entire client data
+   layer. Every write in the product, and every read that is not that listener,
+   goes through a Next.js Route Handler using the Admin SDK (`src/server/**`).
+   A service account is not a rules subject, so those paths never evaluate a
+   single line below.
+
+   These rules therefore protect against exactly one caller: somebody who never
+   loads our app, holding a Firebase ID token, talking to
+   `firestore.googleapis.com` directly. That caller gets what is granted here
+   and nothing more. Which is why every grant has to name a caller that needs
+   it. A grant added "in case the client needs it later" is a grant an attacker
+   has today.
+
+   THE THREE LAYERS, AND WHICH ONE THIS IS
+   ---------------------------------------
+     1. Client gates (<PermissionGate>, filtered nav) — cosmetic, a bundle the
+        caller owns.
+     2. `requirePermission()` in src/lib/admin/guard.ts — verifies the httpOnly
+        session cookie with the Admin SDK. Stops a browser.
+     3. THIS FILE — stops a client that skipped our server entirely.
+
+   TOKEN SHAPE
+   -----------
+   Staff authorisation rides in Firebase Auth custom claims, written by
+   `setAdminRole()` and by `scripts/bootstrap-admin.mjs`:
+
+       { role: 'finance', perms?: ['fraud.review'], mfa: true }
+
+   `perms`, when present, REPLACES the role's grant rather than adding to it —
+   the same precedence `canWithGrants()` implements in rbac.ts. Claims travel
+   inside the signed ID token, so no helper below costs a document read. That is
+   the point: a `get()` inside a rule bills once per rule evaluation, which on a
+   100-row listing is 100 reads to decide whether you may see 100 rows.
+
+   WHAT CHANGED FROM THE PREVIOUS REVISION
+   ---------------------------------------
+   • The legacy `support: true` / `admin: true` boolean claims are gone. Nothing
+     in the current codebase writes them; `setAdminRole()` writes only
+     { role, perms, mfa }. Honouring a claim no writer sets is a permanent
+     unaudited back door.
+   • `/users/{uid}` no longer accepts ANY client write. The previous revision
+     allowed an owner update with an `unchanged([...])` field guard. That works
+     until somebody adds a field and forgets the list. The profile is written by
+     `PATCH /api/account`, so the client does not need it.
+   • `/campaigns` is gone; the advertiser model in use is `/adRequests` plus
+     `/ptcAds`.
+   ========================================================================== */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* ======================================================================
+       HELPERS
+       ====================================================================== */
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    /* Email verification is required to move money and never to earn. Gating a
+       first claim behind a verification email destroys activation for exactly
+       the audience this product serves. Referenced by the withdrawal rules. */
+    function emailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    /* `'role' in token` before reading it. An ordinary user's token carries no
+       role claim, and an unguarded read of a missing key makes the whole
+       expression error — which denies, but denies for a reason nobody can debug
+       from the rules playground. */
+    function role() {
+      return isSignedIn() && 'role' in request.auth.token
+        ? request.auth.token.role
+        : '';
+    }
+
+    function isStaff() {
+      return role() in ['super_admin', 'admin', 'finance', 'moderator', 'support'];
+    }
+
+    /* Every staff account must have satisfied TOTP. A staff token without the
+       claim is treated as not-staff, matching `requireAdmin()`. A console
+       reachable with a password alone is one phishing email from a total
+       compromise. */
+    function staffMfa() {
+      return isSignedIn() && request.auth.token.mfa == true;
+    }
+
+    /* THE PERMISSION GATE. Precedence mirrors canWithGrants() in
+       src/lib/admin/rbac.ts:
+         1. super_admin holds everything — the break-glass guarantee that a
+            mis-saved grant cannot lock every human out of the console that
+            repairs grants.
+         2. an explicit per-user `perms` claim REPLACES the role grant.
+         3. otherwise the role's own grant, written out below.
+
+       The grants are duplicated from rbac.ts because a rules file cannot import
+       TypeScript. Verbose and reviewable beats clever: a rule nobody can read
+       is a rule nobody will notice is wrong. */
+    function hasPerm(p) {
+      return isStaff() && staffMfa() && (
+        role() == 'super_admin'
+        || ('perms' in request.auth.token
+            && request.auth.token.perms is list
+            && p in request.auth.token.perms)
+        || (role() == 'admin' && !(p in
+             ['roles.edit', 'user.delete', 'keys.manage', 'lockdown', 'admin.manage']))
+        || (role() == 'finance' && p in [
+             'user.view', 'balance.view', 'balance.adjust',
+             'withdrawal.view', 'withdrawal.approve', 'withdrawal.batch', 'withdrawal.reverse',
+             'treasury.view', 'rates.edit', 'limits.edit', 'accounting.export',
+             'ads.view', 'advertiser.manage', 'analytics.view', 'audit.view', 'kyc.review'])
+        || (role() == 'moderator' && p in [
+             'user.view', 'user.edit', 'user.note', 'user.suspend', 'user.ban', 'user.bulk',
+             'balance.view', 'fraud.review', 'kyc.review', 'leaderboard.void',
+             'support.view', 'support.reply', 'earn.view', 'audit.view', 'analytics.view'])
+        || (role() == 'support' && p in [
+             'user.view', 'user.note', 'user.security', 'balance.view', 'withdrawal.view',
+             'support.view', 'support.reply', 'support.assign', 'kb.edit', 'earn.view'])
+      );
+    }
+
+    /* True when an update touches ONLY the listed fields. `diff().affectedKeys()`
+       is the whole reason field-level authorisation is expressible at all. */
+    function onlyFields(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    /* ======================================================================
+       /users/{uid} — THE PROFILE, AND THE BALANCE
+       ----------------------------------------------------------------------
+       WHO: the owner reads their own document; staff holding `user.view` read
+       any document. NOBODY writes it from a client — not the owner, not an
+       admin, not a super_admin.
+
+       WHY NO CLIENT WRITE AT ALL: this document carries `balance`,
+       `lockedBalance`, `totalEarned`, `level`, `exp`, `earningBonusBps`,
+       `commissionBps`, `referredBy` and `suspended`. A client that can write
+       any of it can write all of it unless every single field is enumerated in
+       a guard — and the day somebody adds a field and forgets the guard, the
+       faucet mints money. The owner's legitimate edits (country, display
+       currency, notification preferences, username) go through
+       `PATCH /api/account`, which validates them and keeps
+       `/usernames/{lower}` consistent in the same transaction. There is no
+       client write path to close, because there is no client write path.
+
+       `get` and `list` are split so an owner can read themselves without being
+       able to enumerate the collection. Staff `list` is what the console's user
+       table would need if it ever ran client-side; today it reads through the
+       Admin SDK, and the grant costs nothing because `user.view` holders can
+       already see every row.
+       ====================================================================== */
+    match /users/{uid} {
+      allow get: if isOwner(uid) || hasPerm('user.view');
+      allow list: if hasPerm('user.view');
+      allow create, update, delete: if false;
+
+      /* --- claims: the append-only earnings ledger ------------------------
+         WHO: the owner reads their own rows. Nobody writes, ever.
+         WHY: a claim document IS a credit. `balance` and the claim row are
+         written in one transaction by `src/server/ledger.ts`; a client that
+         could create a row here would be crediting itself, and a client that
+         could edit one would be rewriting the audit trail of its own balance.
+         Staff read the ledger through the Admin SDK (Admin → Users → detail),
+         so there is no staff grant here either. */
+      match /claims/{claimId} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+
+      /* --- notifications --------------------------------------------------
+         WHO: the owner reads; the owner may flip `read` and nothing else.
+         WHY: marking a notification read is the one piece of state a user owns
+         outright and the one write that is worth a round-trip saving. The
+         `hasOnly(['read','updatedAt'])` guard is what keeps it from becoming a
+         write primitive: a caller cannot change the title, the href or the
+         tone, so a compromised session cannot turn the notification panel into
+         a phishing surface. `read is bool` blocks the "set read to an object
+         and see what breaks" family of probes. No create — a client that can
+         create notifications can spam any user's panel. */
+      match /notifications/{notificationId} {
+        allow read: if isOwner(uid);
+        allow update: if isOwner(uid)
+                      && onlyFields(['read', 'updatedAt'])
+                      && request.resource.data.read is bool;
+        allow create, delete: if false;
+      }
+
+      /* --- cooldowns: server-owned timers --------------------------------
+         WHO: the owner reads. Nobody writes.
+         WHY: `nextAt` IS the faucet cooldown. A client that could write it
+         could claim on demand. The client displays this value; it never
+         authors it. */
+      match /cooldowns/{cooldownId} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+
+      /* --- taskSessions: single-use PTC / shortlink tokens ---------------
+         WHO: the owner reads. Nobody writes.
+         WHY: `startedAt` is one half of the server-measured dwell time and the
+         document's existence is the anti-replay token. A client that could
+         write `startedAt` could complete a 180-second shortlink instantly; one
+         that could re-create a deleted session could be paid twice for it. */
+      match /taskSessions/{token} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+
+      /* --- addresses: saved payout destinations --------------------------
+         WHO: the owner reads. Nobody writes.
+         WHY: a saved address is pre-filled into a withdrawal form. A client
+         that could edit one could redirect a future payout to itself if it ever
+         got a session on somebody else's account. Writes go through
+         `/api/withdraw` and `/api/account`. */
+      match /addresses/{addressId} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+    }
+
+    /* ======================================================================
+       /usernames/{lower} — the uniqueness index
+       ----------------------------------------------------------------------
+       WHO: anyone may `get` one document. Nobody may `list`, and nobody writes.
+       WHY GET IS OPEN: a signup form checks "is this handle free" before
+       submitting, and the answer is already public — the handle appears on the
+       leaderboard the moment its owner claims anything.
+       WHY LIST IS NOT: `list` on this collection is a downloadable dump of
+       every username on the platform, which is a credential-stuffing target
+       list. One document by exact id is a check; the collection is a scrape.
+       WHY NO WRITE: the claim document and the profile are written in one
+       transaction by `ensureUser()` / `changeUsername()`. A client that could
+       write here could squat every handle on the platform, or point an existing
+       handle at its own uid.
+       ====================================================================== */
+    match /usernames/{lower} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if false;
+    }
+
+    /* ======================================================================
+       /withdrawals/{id} — money leaving the platform
+       ----------------------------------------------------------------------
+       WHO: the owner of the row `get`s it; staff holding `withdrawal.view`
+       `get` and `list` any row. No client write, at any role, ever.
+       WHY NO WRITE: `status` decides whether a payout gets sent, `address`
+       decides where, and `tokenCost` decides what it cost. Every one of them is
+       set once by `requestWithdrawal()` after the balance has already been
+       debited into `lockedBalance`, and changed afterwards only by
+       `approveWithdrawal` / `settleWithdrawal` / `rejectWithdrawal`. A client
+       that could touch this collection could re-address a queued payout or
+       reset a Completed row to Pending and be paid twice.
+       WHY LIST IS STAFF-ONLY: `list` cannot be scoped per-document safely for
+       an owner without also permitting an unfiltered query. The owner's history
+       is served by `listWithdrawals()` server-side, so the owner only needs
+       `get`.
+       `emailVerified()` is referenced here rather than on the earning paths on
+       purpose: verification gates money movement, never activation.
+       ====================================================================== */
+    match /withdrawals/{withdrawalId} {
+      allow get: if (isSignedIn() && resource.data.uid == request.auth.uid && emailVerified())
+                 || hasPerm('withdrawal.view');
+      allow list: if hasPerm('withdrawal.view');
+      allow create, update, delete: if false;
+    }
+
+    /* ======================================================================
+       /referrals/{uid}/list/{refUid} — the referral tree
+       ----------------------------------------------------------------------
+       WHO: the referrer reads their own edges; staff with `user.view` read any.
+       Nobody writes.
+       WHY: `commissionPaid` and `qualified` decide what the referrer is owed and
+       which tier they sit in. The denormalised `username` / `level` /
+       `totalEarned` copies are maintained by the ledger and by
+       `onReferralLevelUp`; a client that could write them could fabricate a
+       hundred qualified referrals and promote itself to the 15% tier.
+       ====================================================================== */
+    match /referrals/{uid}/list/{refUid} {
+      allow read: if isOwner(uid) || hasPerm('user.view');
+      allow write: if false;
+    }
+
+    /* ======================================================================
+       /referralStats/{uid} — click and signup attribution counters
+       ----------------------------------------------------------------------
+       WHO: the owner reads their own funnel; staff with `user.view` read any.
+       Nobody writes.
+       WHY: `clicks` is incremented by the `?r=` handler server-side. It is
+       cosmetic, and it is still a counter — a writable counter is a counter
+       nobody can cite in a dispute about attribution.
+       ====================================================================== */
+    match /referralStats/{uid} {
+      allow read: if isOwner(uid) || hasPerm('user.view');
+      allow write: if false;
+    }
+
+    /* ======================================================================
+       /leaderboard/{period} and .../entries/{entryId}
+       ----------------------------------------------------------------------
+       WHO: any signed-in user reads. Nobody writes.
+       WHY READ IS OPEN TO MEMBERS: a leaderboard is a public scoreboard by
+       definition, and an entry carries only username, country code, board,
+       value and prize. Restricting it to the owner would make the feature
+       meaningless. It is gated on sign-in rather than open because the boards
+       are a product surface, not an SEO one, and an anonymous scraper gains a
+       username list from it.
+       WHY NO WRITE: `value` is the contest. It is incremented inside the same
+       transaction as the credit that earned it (`src/server/ledger.ts`), and
+       `finalRank` / `prizeTokens` are written by `resetLeaderboards` after the
+       period is frozen. A client that could write an entry could award itself
+       first place and the prize that goes with it.
+       ====================================================================== */
+    match /leaderboard/{period} {
+      allow read: if isSignedIn();
+      allow write: if false;
+
+      match /entries/{entryId} {
+        allow read: if isSignedIn();
+        allow write: if false;
+      }
+    }
+
+    /* ======================================================================
+       EARNING CATALOGUES — /ptcAds, /shortlinks, /challenges
+       ----------------------------------------------------------------------
+       WHO: any signed-in user reads. Nobody writes from a client.
+       WHY READ: these are the offer lists a member is being asked to complete.
+       `targetUrl` is the destination they are about to be sent to, so it is not
+       a secret. Gated on sign-in because an anonymous scrape of the shortlink
+       catalogue is a competitor's affiliate list.
+       WHY NO WRITE, INCLUDING FOR STAFF: `tokens`, `reward` and `cap` are
+       payouts. `POST /api/admin/catalogue/{collection}` is the only writer, and
+       it checks `earn.edit` on a verified session, whitelists the collection
+       name, strips `viewsDelivered` / `redeemed` from the payload and writes an
+       audit row. A staff write straight from a client would skip all four.
+       ====================================================================== */
+    match /ptcAds/{adId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /shortlinks/{linkId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /challenges/{challengeId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    /* ======================================================================
+       /offerwallProviders/{id} — NO CLIENT ACCESS AT ALL
+       ----------------------------------------------------------------------
+       WHO: nobody. Not members, not staff.
+       WHY: the document contains `secret` — the shared key an offerwall signs
+       its conversion postbacks with. Firestore rules cannot hide a single field:
+       `allow read` grants the whole document, and there is no projection. So the
+       choice is between leaking the postback secret to every signed-in user and
+       denying client reads outright.
+
+       Leaking it is not survivable. With the secret, anyone can forge a signed
+       postback to `/api/offerwall/{providerId}` and mint tokens at will; the
+       signature check that is the entire security model of the postback endpoint
+       becomes decoration.
+
+       Nothing is lost by denying it. `listOfferProviders()` reads this
+       collection with the Admin SDK and returns a projection: name, blurb,
+       rating, mark, hue, and the iframe URL with `{uid}` / `{username}` /
+       `{country}` already substituted. The browser never needs the raw
+       document, and the admin console edits it through
+       `POST /api/admin/catalogue/offerwallProviders` behind `earn.provider`.
+
+       If you ever do need a client read here, move `secret` to a sibling
+       collection first. Do not relax this rule.
+       ====================================================================== */
+    match /offerwallProviders/{providerId} {
+      allow read, write: if false;
+    }
+
+    /* ======================================================================
+       /adUnits/{placementId} — EXECUTABLE CONTENT
+       ----------------------------------------------------------------------
+       WHO: anyone reads, including anonymous visitors. Staff holding `ads.edit`
+       may write.
+       WHY READ IS PUBLIC: these are ad tags for the landing page and the auth
+       screens, which are rendered for signed-out visitors. There is nothing
+       private in a public ad tag.
+
+       READ THIS BEFORE WIDENING THE WRITE RULE: `html` is injected into a
+       sandboxed iframe and `src` is loaded as a script. This document is CODE
+       that runs in the browser of every visitor to the page it is placed on.
+       Whoever can write it can run arbitrary JavaScript on your users. That is
+       why the write is pinned to `ads.edit` — held only by `admin` and
+       `super_admin` — and why the normal path is
+       `POST /api/admin/ads/{placement}`, which validates the placement against
+       the placement map, refuses a unit with no payload, and writes an audit row
+       naming who pasted what. The grant here exists so the rules layer refuses
+       the same write for a Support token that reached the REST API directly; it
+       is not an invitation to write ad units from a client.
+       ====================================================================== */
+    match /adUnits/{placementId} {
+      allow read: if true;
+      allow write: if hasPerm('ads.edit');
+    }
+
+    /* ======================================================================
+       /config/{economy|rates|ads|site} — the operational levers
+       ----------------------------------------------------------------------
+       WHO: anyone reads. Writes are pinned per document to the permission that
+       owns that surface.
+       WHY READ IS PUBLIC: `rates` is the price list the withdraw page quotes
+       from and `economy` is the reward table the landing page advertises. Both
+       are published information — hiding them would mean a signed-out visitor
+       cannot be told what a faucet claim pays, which is the first question
+       anybody asks. `site` carries the maintenance flag, which has to be
+       readable to be useful. None of the four holds a secret; provider keys live
+       in environment variables, never here.
+       WHY WRITES ARE SPLIT: `rates.usdPerToken` is the exchange rate for every
+       payout on the platform, so `rates.edit` (Finance and above) owns it.
+       `economy` is reward and cap configuration, so `earn.edit` owns it. `site`
+       is feature flags and the kill switch, so `flags.edit` or
+       `maintenance.toggle`. `ads` is the ad master switch, so `ads.edit`.
+       Support holds none of them, which is the intended outcome: a support
+       agent cannot reprice the token.
+       An unknown document under /config is denied — a new config surface should
+       be a deliberate rule, not an inherited one.
+       ====================================================================== */
+    match /config/{document} {
+      allow read: if true;
+      allow write: if (document == 'rates'   && hasPerm('rates.edit'))
+                   || (document == 'economy' && hasPerm('earn.edit'))
+                   || (document == 'ads'     && hasPerm('ads.edit'))
+                   || (document == 'site'    && (hasPerm('flags.edit') || hasPerm('maintenance.toggle')));
+    }
+
+    /* ======================================================================
+       /stats/global and /stats/daily/days/{YYYY-MM-DD}
+       ----------------------------------------------------------------------
+       WHO: anyone reads. Nobody writes.
+       WHY: these are the public counters on the landing page — members, claims,
+       tokens paid, withdrawals. They are incremented by `bumpStat()` inside the
+       transaction that earned them. A writable counter is a counter that can be
+       inflated, and "1.8M members" is a claim this product makes in its
+       marketing copy; it should be a number the database actually holds.
+       The recursive wildcard covers `/stats/daily/days/{day}`, which is nested
+       two levels down.
+       ====================================================================== */
+    match /stats/{document=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    /* ======================================================================
+       /coupons/{CODE} and /coupons/{CODE}/redemptions/{uid} — NO CLIENT ACCESS
+       ----------------------------------------------------------------------
+       WHO: nobody, at any role.
+       WHY: a readable coupon collection IS a coupon list. `list` hands over
+       every unredeemed code on the platform, and `get` turns code guessing into
+       a free oracle — you learn which of your guesses exist without spending a
+       redemption. Redemption goes through `POST /api/coupon`, which reads the
+       document with the Admin SDK, checks expiry, cap and the per-user marker,
+       and creates `/coupons/{CODE}/redemptions/{uid}` inside the same
+       transaction as the credit. That `create` failing is what makes
+       "one per user" hold under two simultaneous requests, so the marker must
+       not be creatable or deletable from anywhere else.
+       ====================================================================== */
+    match /coupons/{code} {
+      allow read, write: if false;
+
+      match /redemptions/{uid} {
+        allow read, write: if false;
+      }
+    }
+
+    /* ======================================================================
+       /tickets/{id} and .../messages/{id} — support
+       ----------------------------------------------------------------------
+       WHO: the ticket's owner `get`s it and reads its messages; staff holding
+       `support.view` `get` and `list` any ticket. No client write.
+
+       WHY CLIENT CREATE IS DENIED, even though a user obviously creates tickets:
+       an allowed `create` here would have to constrain `uid`, `status`,
+       `unreadForSupport`, `unreadForUser`, `assignedTo`, `lastMessageAt`,
+       `lastMessagePreview`, `category` against the enum, and the length of
+       `subject` and `body` — and get every one of them right, forever, as the
+       shape changes. `POST /api/tickets` already does all of that in one place,
+       plus writes the first message and the denormalised preview in the same
+       call. Two implementations of the same validation is one implementation
+       that will disagree with the other.
+
+       A user who is not the owner cannot read a ticket even by guessing its id,
+       and `replyToTicket()` re-checks ownership server-side as well. Both
+       layers, because the id is a 20-character Firestore auto-id and "unguessable"
+       is not an authorisation model.
+       ====================================================================== */
+    match /tickets/{ticketId} {
+      allow get: if (isSignedIn() && resource.data.uid == request.auth.uid)
+                 || hasPerm('support.view');
+      allow list: if hasPerm('support.view');
+      allow write: if false;
+
+      /* Messages inherit the parent's ownership. `get(...)` on the parent inside
+         a rule would cost a document read per message evaluated, so instead the
+         grant is staff-only here and the owner's transcript is served by
+         `listUserTickets()` through the Admin SDK — which is how the Support page
+         renders it anyway. */
+      match /messages/{messageId} {
+        allow read: if hasPerm('support.view');
+        allow write: if false;
+      }
+    }
+
+    /* ======================================================================
+       /chats/{uid} and .../messages/{id} — the AI assistant transcript
+       ----------------------------------------------------------------------
+       WHO: staff holding `support.view`. No member access, no client write.
+       WHY: the panel posts through a Route Handler and renders from a server
+       read, so the client SDK has no need for it. `mode` and `escalatedTicketId`
+       are the state `escalateStaleChat` acts on — a client that could set
+       `escalatedTicketId` could make its own conversation invisible to the
+       escalation sweep, which is the one mechanism that guarantees an
+       unanswered user reaches a human.
+       ====================================================================== */
+    match /chats/{uid} {
+      allow read: if hasPerm('support.view');
+      allow write: if false;
+
+      match /messages/{messageId} {
+        allow read: if hasPerm('support.view');
+        allow write: if false;
+      }
+    }
+
+    /* ======================================================================
+       /auditLog/{id} — APPEND-ONLY, AND NOT EVEN THAT FROM A CLIENT
+       ----------------------------------------------------------------------
+       WHO: staff holding `audit.view` read. NOBODY creates, updates or deletes.
+       Not Support, not Finance, not admin, not super_admin.
+
+       WHY EVEN SUPER_ADMIN IS DENIED: the audit log is the record of what staff
+       did. If the staff role with the most power can also write it, the log
+       proves nothing about the person most worth auditing. `writeAudit()` in
+       `src/server/admin.ts` appends through the Admin SDK, which does not
+       evaluate these rules — so the log still gets written on every privileged
+       action, and there is no path by which a human client can forge or erase a
+       row.
+
+       Stated plainly because it looks like a contradiction: this rule does not
+       stop our own server from writing. It stops every OTHER caller, which is
+       the only thing a rule can do here, and it means a stolen super_admin token
+       cannot be used to sanitise the trail it leaves behind.
+       ====================================================================== */
+    match /auditLog/{entryId} {
+      allow read: if hasPerm('audit.view');
+      allow create, update, delete: if false;
+    }
+
+    /* ======================================================================
+       SERVER-ONLY COLLECTIONS
+       ----------------------------------------------------------------------
+       Everything below is written exclusively by the Admin SDK and is read from
+       a client only where an admin console screen would genuinely need it. No
+       write is granted anywhere in this section, at any role. The pattern is
+       deliberate: read grants are per-permission so a Support token cannot open
+       the fraud queue, and the absence of write grants means a stolen staff
+       token cannot alter a queue's state — it can only look at it.
+       ====================================================================== */
+
+    /* Solved-captcha hashes. NO READ, at any role: the collection is the
+       single-use record that stops one solved captcha funding a thousand claims.
+       Being able to enumerate it tells an attacker which action scopes exist and
+       which hashes are already spent, and being able to delete from it would
+       reset the replay guard. Reclaimed by a TTL policy on `expiresAt`, which is
+       created by hand — see DEPLOY.md. */
+    match /captchaTokens/{hash} {
+      allow read, write: if false;
+    }
+
+    /* Lottery. The round document is readable by members because the pool, the
+       ticket count and the draw time are the product, and the published `seed`
+       is what makes the draw checkable after the fact — a commit-reveal whose
+       reveal is private is not a commit-reveal. Tickets and draw records are
+       staff-read only: `status` and `prize` decide who won, and the ticket rows
+       are the evidence a disputed draw is re-run against. */
+    match /lottery/{roundId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /lotteryTickets/{ticketId} {
+      allow read: if hasPerm('earn.view');
+      allow write: if false;
+    }
+
+    match /lotteryDraws/{drawId} {
+      allow read: if hasPerm('earn.view');
+      allow write: if false;
+    }
+
+    /* Offerwall conversions. The document id is the provider's transaction id,
+       which is what makes a duplicate postback a failed `create` rather than a
+       double credit; `rawPayload` retains the signed payload for disputes.
+       Staff read it from Admin → Modules → Offerwall. A member's own history is
+       served by `listConversions()` server-side. */
+    match /offerwallConversions/{conversionId} {
+      allow read: if hasPerm('earn.view');
+      allow write: if false;
+    }
+
+    /* Staff directory and the role mirror. Read behind `admin.view`; never
+       writable. `/staff/{uid}` is cosmetic (the display name in the console
+       header) — the authorisation itself lives in the custom claim, so a client
+       write here would grant nothing, and denying it keeps the staff table from
+       disagreeing with the tokens. `/roleGrants/{role}` IS consulted by
+       `canWithGrants()`, so it is `roles.edit` — super_admin only — and still
+       write-denied, because the matrix editor goes through a callable that also
+       revokes refresh tokens. */
+    match /staff/{uid} {
+      allow read: if hasPerm('admin.view');
+      allow write: if false;
+    }
+
+    match /adminUsers/{uid} {
+      allow read: if hasPerm('admin.view');
+      allow write: if false;
+    }
+
+    match /roleGrants/{roleId} {
+      allow read: if hasPerm('roles.edit');
+      allow write: if false;
+    }
+
+    /* Compliance and moderation queues. Each read is pinned to the permission
+       whose console screen shows it, which is what stops a Support token from
+       reading KYC documents or a fraud cluster. */
+    match /kycRequests/{requestId} {
+      allow read: if hasPerm('kyc.review');
+      allow write: if false;
+    }
+
+    match /fraudFlags/{flagId} {
+      allow read: if hasPerm('fraud.review');
+      allow write: if false;
+    }
+
+    match /changeRequests/{requestId} {
+      allow read: if hasPerm('user.edit');
+      allow write: if false;
+    }
+
+    /* Advertiser submissions: creative and budget awaiting moderation. Read
+       behind `ads.view`; approval happens through a callable that enforces
+       `ads.approve`. */
+    match /adRequests/{requestId} {
+      allow read: if hasPerm('ads.view');
+      allow write: if false;
+    }
+
+    /* Direct on-chain payout batches, written by `processDirectWithdrawalBatch`.
+       One document per network per 48-hour window, holding the withdrawal ids it
+       claimed. Read behind `withdrawal.view` because reconciling a batch against
+       the chain is a Finance job; never writable, because `batchId` on a
+       withdrawal is what stops the next run picking the same payout up and
+       sending it twice. */
+    match /payoutBatches/{batchId} {
+      allow read: if hasPerm('withdrawal.view');
+      allow write: if false;
+    }
+
+    /* Background job bookkeeping and platform config. `system.view` for job
+       state, `security.config` for the anti-abuse document, `backup.run` for
+       backup records. All read-only: a client that could write `/jobs/{id}` could
+       mark a scheduled job complete and stop it running. */
+    match /jobs/{jobId} {
+      allow read: if hasPerm('system.view');
+      allow write: if false;
+    }
+
+    match /platformConfig/{document} {
+      allow read: if hasPerm('security.config');
+      allow write: if false;
+    }
+
+    match /backups/{backupId} {
+      allow read: if hasPerm('backup.run');
+      allow write: if false;
+    }
+
+    /* ======================================================================
+       DEFAULT DENY
+       ----------------------------------------------------------------------
+       Firestore already denies anything no rule matches, so this block grants
+       nothing and changes nothing — rules are a permissive union and a `false`
+       here cannot override an `allow` above it. It is here as a statement of
+       posture: any collection added tomorrow is unreachable from a client until
+       somebody writes a rule for it and explains why, and that is the correct
+       failure mode for a product where the client's only legitimate read is one
+       document.
+       ====================================================================== */
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

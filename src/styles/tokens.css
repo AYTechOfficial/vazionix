@@ -1,0 +1,346 @@
+/* ============================================================================
+   VIE FAUCET — DESIGN TOKENS
+   Single source of truth. Every colour, size, radius, duration in the product
+   resolves to a token declared here. No ad-hoc values downstream.
+
+   Positioning: "The Coinbase of crypto faucets."
+   Dark-first. Restrained glass. Depth via hairlines + surface lift, not shadow.
+   ========================================================================== */
+
+:root {
+  /* ---- SURFACE RAMP -------------------------------------------------------
+     Depth in dark UI comes from *lightening the surface* and a 1px hairline.
+     Drop-shadows are invisible on near-black and are therefore not used for
+     in-page elevation — only for true overlays (menus, modals, toasts).      */
+  --bg:            #08090C;   /* page canvas — never pure #000 */
+  --surface-1:     #0F1116;   /* cards, panels */
+  --surface-2:     #161922;   /* raised: table headers, inputs, hovered rows */
+  --surface-3:     #1E222D;   /* highest: active chips, selected states */
+  --surface-inset: #0B0C10;   /* recessed wells: code, progress tracks */
+
+  /* Hairlines — the primary depth mechanic */
+  --line:          rgba(255, 255, 255, 0.07);
+  --line-strong:   rgba(255, 255, 255, 0.12);
+  --line-accent:   rgba(0, 229, 160, 0.28);
+
+  /* ---- TEXT ---------------------------------------------------------------
+     Never pure #FFF on near-black: it vibrates and raises perceived contrast
+     past comfort. --text tests ~15:1 on --bg, ~12:1 on --surface-3.          */
+  --text:          #F2F4F7;
+  --text-2:        #A0A7B4;   /* secondary — ~7.2:1 on --surface-1 */
+  --text-3:        #6E7686;   /* tertiary/meta — ~4.6:1, non-essential only */
+  --text-inverse:  #08090C;   /* on bright accent fills */
+
+  /* ---- SIGNATURE ACCENT ---------------------------------------------------
+     Mint is the single interactive colour: primary CTAs, focus, active nav.
+     Violet is the secondary/energy colour. Blue closes the gradient.
+     The three-stop gradient is RESERVED — hero headline, balance card,
+     level ring, final CTA band. Never as a button fill in-app.              */
+  --mint:          #00E5A0;
+  --mint-hover:    #2BEFB2;
+  --mint-press:    #00C489;
+  --mint-dim:      rgba(0, 229, 160, 0.12);
+  --mint-dim-2:    rgba(0, 229, 160, 0.20);
+
+  --violet:        #6C5CE7;
+  --violet-dim:    rgba(108, 92, 231, 0.14);
+  --blue:          #2D5BFF;
+  --blue-dim:      rgba(45, 91, 255, 0.14);
+
+  --grad-signature: linear-gradient(115deg, #00E5A0 0%, #6C5CE7 52%, #2D5BFF 100%);
+  --grad-soft:      linear-gradient(135deg, rgba(0,229,160,0.16) 0%, rgba(108,92,231,0.14) 55%, rgba(45,91,255,0.12) 100%);
+  --grad-text:      linear-gradient(96deg, #FFFFFF 0%, #C6FFEA 38%, #B7A9FF 78%);
+
+  /* ---- SEMANTIC -----------------------------------------------------------
+     Danger is reserved for "we are stopping you". An unknown or pending state
+     is never red. Success/loss colours are text+tint, never a button fill.   */
+  --success:       #2FD48F;
+  --success-dim:   rgba(47, 212, 143, 0.13);
+  --warning:       #F5A524;
+  --warning-dim:   rgba(245, 165, 36, 0.13);
+  --danger:        #F2555A;
+  --danger-dim:    rgba(242, 85, 90, 0.13);
+  --info:          #4C8DFF;
+  --info-dim:      rgba(76, 141, 255, 0.13);
+  --neutral-dim:   rgba(160, 167, 180, 0.12);
+
+  /* Sponsored / advertising surface — deliberately its own hue family so a
+     paid unit can never be mistaken for product chrome (or vice versa).     */
+  --sponsor:       #C8A96A;
+  --sponsor-dim:   rgba(200, 169, 106, 0.10);
+  --sponsor-line:  rgba(200, 169, 106, 0.24);
+
+  /* ---- FOCUS --------------------------------------------------------------
+     A dedicated hue that is neither the accent nor a semantic colour, so a
+     focused danger button still shows an unambiguous ring. Two-tone: the ring
+     plus a surface-coloured halo that lifts it off any background.          */
+  --focus:         #8AB6EF;
+  --focus-ring:    0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
+
+  /* ---- GLASS --------------------------------------------------------------
+     Used in EXACTLY four places: the app top bar, the ⌘K palette, the
+     withdraw review modal, the support panel. Max 3 per viewport.
+     The inset top highlight is what separates "glass" from "fog" — it is
+     mandatory, not decorative.                                              */
+  --glass-bg:      rgba(255, 255, 255, 0.055);
+  --glass-blur:    blur(18px) saturate(150%) brightness(1.06);
+  --glass-line:    rgba(255, 255, 255, 0.09);
+  --glass-line-top:rgba(255, 255, 255, 0.17);
+  --glass-inset:   inset 0 1px 0 rgba(255, 255, 255, 0.10);
+
+  /* ---- ELEVATION (overlays only) ----------------------------------------- */
+  --shadow-sm:     0 1px 2px rgba(0,0,0,0.40);
+  --shadow-md:     0 8px 24px -6px rgba(0,0,0,0.60), 0 2px 6px rgba(0,0,0,0.35);
+  --shadow-lg:     0 24px 64px -12px rgba(0,0,0,0.72), 0 6px 16px rgba(0,0,0,0.40);
+  --shadow-mint:   0 8px 32px -8px rgba(0, 229, 160, 0.42);
+
+  /* ---- TYPOGRAPHY ---------------------------------------------------------
+     Geist  — display/headings (geometric, confident, fintech-native)
+     Inter  — body, labels, UI
+     JetBrains Mono — ALL money. Tabular figures so digits never jitter as
+     balances tick up, and columns align on the decimal.                     */
+  --font-display: 'Geist', 'Inter Tight', ui-sans-serif, system-ui, sans-serif;
+  --font-body:    'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Strict scale — no ad-hoc sizes anywhere downstream */
+  --t-11: 0.6875rem;  /* 11 — micro labels, table meta */
+  --t-12: 0.75rem;    /* 12 — captions, badges */
+  --t-13: 0.8125rem;  /* 13 — dense table cells */
+  --t-14: 0.875rem;   /* 14 — body default, nav, buttons */
+  --t-16: 1rem;       /* 16 — lead body, card titles */
+  --t-20: 1.25rem;    /* 20 — section headings */
+  --t-24: 1.5rem;     /* 24 — page titles */
+  --t-32: 2rem;       /* 32 — stat values, landing sub-heads */
+  --t-48: 3rem;       /* 48 — landing section heads */
+  --t-64: 4rem;       /* 64 — hero */
+  --t-80: 5rem;       /* 80 — hero (xl viewports) */
+
+  --lh-tight: 1.05;
+  --lh-snug:  1.25;
+  --lh-body:  1.55;
+  --tr-tight: -0.03em;   /* display */
+  --tr-snug:  -0.015em;  /* headings */
+  --tr-wide:  0.08em;    /* eyebrow / all-caps */
+
+  /* ---- SPACE (4px base) --------------------------------------------------- */
+  --s-1: 4px;   --s-2: 8px;   --s-3: 12px;  --s-4: 16px;
+  --s-5: 20px;  --s-6: 24px;  --s-8: 32px;  --s-10: 40px;
+  --s-12: 48px; --s-16: 64px; --s-20: 80px; --s-24: 96px; --s-32: 128px;
+
+  /* ---- RADIUS (three, plus pill) ------------------------------------------ */
+  --r-sm:   8px;    /* inputs, chips, small buttons */
+  --r-md:   14px;   /* cards, panels, buttons */
+  --r-lg:   22px;   /* hero cards, modals, feature tiles */
+  --r-pill: 999px;
+
+  /* ---- MOTION -------------------------------------------------------------
+     Snappy premium: fast in, gentle settle. Scroll-tied timelines on the
+     landing page are the only thing allowed past 300ms.                     */
+  --e-out:    cubic-bezier(0.22, 0.61, 0.36, 1);
+  --e-in-out: cubic-bezier(0.65, 0.05, 0.36, 1);
+  --e-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --d-fast:   120ms;
+  --d-base:   200ms;
+  --d-slow:   320ms;
+
+  /* ---- LAYOUT ------------------------------------------------------------- */
+  --sidebar-w:          256px;
+  --sidebar-w-collapsed: 72px;
+  --topbar-h:           60px;
+  --row-h:              44px;   /* comfortable table row */
+  --row-h-compact:      34px;   /* dense earnings tables (default) */
+  --content-max:        1440px;
+  --prose-max:          72ch;
+  --z-sticky: 100; --z-drawer: 200; --z-overlay: 300; --z-toast: 400; --z-palette: 500;
+}
+
+/* ============================================================================
+   LIGHT THEME — a genuine second theme, not an inverted afterthought.
+   Same token names, re-pointed. Everything downstream adapts for free.
+   ========================================================================== */
+[data-theme='light'] {
+  --bg:            #F7F8FA;
+  --surface-1:     #FFFFFF;
+  --surface-2:     #F2F4F7;
+  --surface-3:     #E8EBF0;
+  --surface-inset: #EEF1F5;
+
+  --line:          rgba(12, 16, 26, 0.09);
+  --line-strong:   rgba(12, 16, 26, 0.16);
+  --line-accent:   rgba(0, 168, 118, 0.34);
+
+  --text:          #0C1018;
+  --text-2:        #4A5361;
+  --text-3:        #78818F;
+  --text-inverse:  #FFFFFF;
+
+  /* Mint darkens in light mode so it still passes contrast as a text colour
+     and as a button fill with white text. */
+  --mint:          #00A876;
+  --mint-hover:    #00BC84;
+  --mint-press:    #008C62;
+  --mint-dim:      rgba(0, 168, 118, 0.10);
+  --mint-dim-2:    rgba(0, 168, 118, 0.18);
+  --text-on-mint:  #FFFFFF;
+
+  --violet:        #5B4BD6;
+  --violet-dim:    rgba(91, 75, 214, 0.10);
+  --blue:          #1E48E0;
+  --blue-dim:      rgba(30, 72, 224, 0.10);
+
+  --success:       #12A06B;  --success-dim: rgba(18, 160, 107, 0.11);
+  --warning:       #B87908;  --warning-dim: rgba(184, 121, 8, 0.11);
+  --danger:        #D93B41;  --danger-dim:  rgba(217, 59, 65, 0.10);
+  --info:          #2A6FE0;  --info-dim:    rgba(42, 111, 224, 0.10);
+  --neutral-dim:   rgba(74, 83, 97, 0.09);
+
+  --sponsor:       #8A6D2E;
+  --sponsor-dim:   rgba(138, 109, 46, 0.07);
+  --sponsor-line:  rgba(138, 109, 46, 0.22);
+
+  --focus:         #1E5FD0;
+  --focus-ring:    0 0 0 2px var(--surface-1), 0 0 0 4px var(--focus);
+
+  --glass-bg:      rgba(255, 255, 255, 0.72);
+  --glass-blur:    blur(18px) saturate(180%);
+  --glass-line:    rgba(12, 16, 26, 0.10);
+  --glass-line-top:rgba(255, 255, 255, 0.90);
+  --glass-inset:   inset 0 1px 0 rgba(255, 255, 255, 0.80);
+
+  --shadow-sm:     0 1px 2px rgba(12,16,26,0.06);
+  --shadow-md:     0 8px 24px -6px rgba(12,16,26,0.12), 0 2px 6px rgba(12,16,26,0.06);
+  --shadow-lg:     0 24px 64px -12px rgba(12,16,26,0.18), 0 6px 16px rgba(12,16,26,0.08);
+  --shadow-mint:   0 8px 32px -8px rgba(0, 168, 118, 0.32);
+
+  --grad-text:     linear-gradient(96deg, #0C1018 0%, #00875E 42%, #4433B8 82%);
+}
+
+/* Text colour that sits on a mint fill. Dark in dark-mode (mint is bright),
+   white in light-mode (mint is darkened). */
+:root { --text-on-mint: var(--text-inverse); }
+
+/* ============================================================================
+   NEXT PORT ADDENDA
+   Everything above this line is the prototype's tokens.css, verbatim.
+   Below: only what the React/Tailwind port needs, and nothing that changes
+   an existing value.
+   ========================================================================== */
+
+/* next/font injects these variables on <html>. Repointing the three font
+   tokens at them means every downstream `font-family: var(--font-display)`
+   keeps working while we get self-hosted, subset, preloaded fonts with zero
+   layout shift instead of a render-blocking CDN <link>. The fallbacks stay in
+   place so the tokens are still valid if next/font is ever removed. */
+:root {
+  --font-display: var(--font-geist, 'Geist'), 'Inter Tight', ui-sans-serif, system-ui, sans-serif;
+  --font-body:    var(--font-inter, 'Inter'), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:    var(--font-jetbrains, 'JetBrains Mono'), ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+/* Theme transition. Applied only while the theme is actually switching (the
+   provider adds `.theme-transition` for 320ms) so it never fights page-load
+   paint or the reduced-motion override below. */
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+  transition: background-color var(--d-slow) var(--e-out),
+              border-color var(--d-slow) var(--e-out),
+              color var(--d-slow) var(--e-out),
+              fill var(--d-slow) var(--e-out),
+              stroke var(--d-slow) var(--e-out) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-transition, .theme-transition *,
+  .theme-transition *::before, .theme-transition *::after { transition: none !important; }
+}
+
+/* ----------------------------------------------------------------------------
+   DERIVED TOKENS
+   The prototype's components.css inlined a handful of alpha values and two-tone
+   ramps (`rgba(242,85,90,0.30)` for a danger border, `#A99AFF` for violet text
+   on dark, the medal and coin gradients). Every one of them is promoted to a
+   token here so the "no hardcoded colour outside tokens.css" rule holds
+   literally, and so the light theme can re-point them like anything else.
+   -------------------------------------------------------------------------- */
+:root {
+  /* Semantic hairlines — one step stronger than the -dim fills they border. */
+  --success-line: rgba(47, 212, 143, 0.30);
+  --warning-line: rgba(245, 165, 36, 0.30);
+  --danger-line:  rgba(242, 85, 90, 0.30);
+  --info-line:    rgba(76, 141, 255, 0.30);
+  --violet-line:  rgba(108, 92, 231, 0.32);
+  --danger-hover: rgba(242, 85, 90, 0.20);
+
+  /* Violet and blue are too dark to read as *text* on a near-black surface;
+     these are the lifted variants. In light mode they collapse back to the
+     base hue, which is already dark enough to pass on white. */
+  --violet-text: #A99AFF;
+  --blue-text:   #7FA5FF;
+
+  /* Chart-only neutral: a fourth series colour that must read as a category
+     rather than as a disabled state, so it cannot be --text-3. */
+  --chart-neutral: #5A6377;
+
+  /* Scrim behind modals, the palette and the mobile drawer. */
+  --scrim: rgba(4, 6, 10, 0.68);
+
+  /* Medals. Metallic ramps, not flat fills — a flat gold reads as a warning. */
+  --rank-1:     linear-gradient(140deg, #F7D774, #C89B2B);
+  --rank-1-ink: #20180A;
+  --rank-1-line: rgba(247, 215, 116, 0.34);
+  --rank-1-glow: rgba(247, 215, 116, 0.16);
+  --rank-2:     linear-gradient(140deg, #DCE3EC, #9AA6B6);
+  --rank-2-ink: #161A20;
+  --rank-2-glow: rgba(220, 227, 236, 0.10);
+  --rank-3:     linear-gradient(140deg, #E0A579, #B06E3C);
+  --rank-3-ink: #1E1109;
+  --rank-3-glow: rgba(224, 165, 121, 0.10);
+
+  /* Coin discs. Authored rather than fetched: keeps the bundle portable, works
+     offline, and every ticker stays visually consistent at any size. Each has
+     an -ink pair because a light disc needs dark lettering. */
+  /* Ink on any vivid/saturated fill: coin discs, generated tile gradients,
+     solid semantic badges. White in both themes by design. */
+  --on-vivid: #FFFFFF;
+  --coin-ink: var(--on-vivid);
+  --coin-BTC:   linear-gradient(145deg, #FFA940, #E8850C);   --coin-BTC-ink:   #FFFFFF;
+  --coin-LTC:   linear-gradient(145deg, #BFC9D6, #8A96A6);   --coin-LTC-ink:   #FFFFFF;
+  --coin-TRX:   linear-gradient(145deg, #FF4B54, #C41F27);   --coin-TRX-ink:   #FFFFFF;
+  --coin-SOL:   linear-gradient(145deg, #19FB9B, #8C46FF);   --coin-SOL-ink:   #07130F;
+  --coin-DOGE:  linear-gradient(145deg, #F2D07A, #C2A02F);   --coin-DOGE-ink:  #221B06;
+  --coin-USDT:  linear-gradient(145deg, #3ED6A6, #0F9A72);   --coin-USDT-ink:  #FFFFFF;
+  --coin-TON:   linear-gradient(145deg, #4FA8E8, #0F7BC4);   --coin-TON-ink:   #FFFFFF;
+  --coin-PEPE:  linear-gradient(145deg, #6FD36F, #2E8B33);   --coin-PEPE-ink:  #FFFFFF;
+  --coin-SHIB:  linear-gradient(145deg, #FF8A5C, #D3421C);   --coin-SHIB-ink:  #FFFFFF;
+  --coin-FLOKI: linear-gradient(145deg, #F7B955, #D07E12);   --coin-FLOKI-ink: #241704;
+  --coin-BONK:  linear-gradient(145deg, #FFC94D, #E4780F);   --coin-BONK-ink:  #241704;
+  --coin-BNB:   linear-gradient(145deg, #F5D260, #D19C10);   --coin-BNB-ink:   #241704;
+
+  /* Ink that sits on the signature gradient (logo tile, avatar, launcher). */
+  --on-grad: #06131A;
+
+  /* Ink on a solid danger fill (count badges). White in both themes: the
+     danger hue is dark enough for white type in light mode too. */
+  --on-danger: var(--on-vivid);
+}
+
+[data-theme='light'] {
+  --success-line: rgba(18, 160, 107, 0.28);
+  --warning-line: rgba(184, 121, 8, 0.28);
+  --danger-line:  rgba(217, 59, 65, 0.26);
+  --info-line:    rgba(42, 111, 224, 0.26);
+  --violet-line:  rgba(91, 75, 214, 0.28);
+  --danger-hover: rgba(217, 59, 65, 0.16);
+
+  --violet-text: var(--violet);
+  --blue-text:   var(--blue);
+  --chart-neutral: #6B7486;
+
+  --scrim: rgba(12, 16, 26, 0.42);
+  --rank-1-line: rgba(200, 155, 43, 0.42);
+  --rank-1-glow: rgba(247, 215, 116, 0.26);
+  --rank-2-glow: rgba(154, 166, 182, 0.18);
+  --rank-3-glow: rgba(176, 110, 60, 0.16);
+}

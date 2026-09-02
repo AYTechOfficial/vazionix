@@ -1,0 +1,346 @@
+{
+  "//": [
+    "VAZIONIX — FIRESTORE COMPOSITE INDEXES",
+    "=====================================================================",
+    "Every entry below was derived by reading the query that needs it. The file",
+    "column is where that query lives; if you delete the query, delete the index.",
+    "An index with no query behind it is write amplification nobody is using: it",
+    "is charged on every document write, forever, to serve nothing.",
+    "",
+    "SINGLE-FIELD INDEXES ARE NOT LISTED, AND MUST NOT BE.",
+    "Firestore creates them automatically for every field, ascending and",
+    "descending, and the API REJECTS a composite index that names only one field",
+    "('this index is not necessary, configure using single field index controls').",
+    "Adding one breaks `firebase deploy --only firestore:indexes` outright. The",
+    "queries in this product that are served by automatic single-field indexes:",
+    "  users            orderBy usernameLower + startAt/endAt (admin search)",
+    "  users            where email ==                        (admin search)",
+    "  users            where referralCode ==                 (signup attribution)",
+    "  users            where lastSeenAt >= cutoff .count()   (online now)",
+    "  users            where suspended == true .count()      (admin overview)",
+    "  users            orderBy createdAt|balance|totalEarned|level desc",
+    "                                                         (listUsers sorts)",
+    "  claims           orderBy createdAt desc                (ledger page)",
+    "  claims           where createdAt >= since orderBy createdAt asc",
+    "                                                         (earnings chart)",
+    "  claims           where source == 'challenge'           (challenge state)",
+    "  notifications    orderBy createdAt desc / where read == false",
+    "  cooldowns        where kind ==                          (cooldown map)",
+    "  referrals/list   orderBy joinedAt desc                  (referral table)",
+    "  tickets          where status == 'Open' .count()         (nav badge)",
+    "  withdrawals      where status in [...] .count()          (nav badge)",
+    "  kycRequests|fraudFlags|changeRequests|adRequests  where status == ...",
+    "  staff            where role == 'super_admin'              (bootstrap guard)",
+    "  captchaTokens    where expiresAt <= cutoff                (hourly cleanup)",
+    "  taskSessions     where expiresAt <= cutoff, COLLECTION_GROUP scope — this",
+    "                   one is NOT automatic and is configured in fieldOverrides",
+    "                   below; a collection-group query needs an explicit index",
+    "                   even for a single field.",
+    "  stats/daily/days orderBy day desc                        (admin charts)",
+    "  auditLog         orderBy createdAt desc                  (audit page)",
+    "  messages         orderBy createdAt asc                   (ticket thread)",
+    "",
+    "Comments live in this top-level key, not inside the index objects: the CLI",
+    "validates each index against a strict schema and rejects unknown properties.",
+    "The order below matches the `indexes` array exactly.",
+    "",
+    "  1. entries               board ==, value desc          getLeaderboard() — src/server/social.ts; rankLiveBoard() — functions/src/index.ts",
+    "  2. entries               board ==, finalRank asc       readRankedBoard() — functions/src/index.ts. Reads a settled period back for the podium snapshot and the prize payout.",
+    "  3. entries (GROUP)       board ==, value desc          NO LIVE CALLER. The ranking job queries one period path at a time, which the collection-scoped #1 already serves. Kept because the deployment brief asked for the group variant and because a cross-period `collectionGroup('entries')` query is otherwise a rebuild away. Delete it if you never add one — it is charged on every entries write.",
+    "  4. claims                source ==, createdAt desc     listLedger(source) — src/server/ledger.ts; listRedemptions() — src/server/earn/coupon.ts",
+    "  5. claims                source ==, day ==             countToday() — src/server/ledger.ts. Every daily cap check in the product.",
+    "  6. claims                source ==, createdAt asc      shortlinkUsageToday() — src/server/earn/links.ts. An ascending range, which is not the reverse of #4, and it runs on every shortlink page render.",
+    "  7. withdrawals           uid ==, createdAt desc        listWithdrawals() — src/server/withdraw.ts; getUserDetail() — src/server/admin.ts; and the uid + createdAt >= daily-count aggregate in requestWithdrawal().",
+    "  8. withdrawals           uid ==, clientRequestId ==    the replay lookup in requestWithdrawal() — src/server/withdraw.ts. Two equality filters, on the money path; an index makes it one seek instead of a merge.",
+    "  9. withdrawals           status ==, createdAt desc     listWithdrawalQueue() — src/server/admin.ts. Serves both `status ==` and `status in [Pending, HeldForReview, Processing]`.",
+    " 10. withdrawals           status ==, processedAt desc   getPayoutTicker() — src/server/stats.ts; getFinanceSummary() — src/server/admin.ts.",
+    " 11. withdrawals           status ==, rail ==, createdAt asc   processDirectWithdrawalBatch() — functions/src/index.ts. Oldest Pending Direct payouts first. `network` is NOT in this index: the job groups by network in memory after the read, so an index with `network` between `rail` and `createdAt` would not serve the query at all.",
+    " 12. users                 suspended ==, createdAt desc  listUsers({ suspended }) — src/server/admin.ts.",
+    " 13. users                 suspended ==, suspendedUntil asc   expireSuspensions() — functions/src/index.ts (hourly). Also the read-path repair in liftExpiredSuspension().",
+    " 14. tickets               uid ==, lastMessageAt desc    listUserTickets() — src/server/support.ts; getUserDetail() — src/server/admin.ts.",
+    " 15. tickets               status ==, lastMessageAt desc listTickets({ status }) — src/server/admin.ts.",
+    " 16. ptcAds                enabled ==, tokens desc       listPtcAds() — src/server/earn/links.ts.",
+    " 17. shortlinks            enabled ==, reward desc       listShortlinks() — src/server/earn/links.ts.",
+    " 18. challenges            enabled ==, tokens desc       listChallenges() — src/server/earn/daily.ts.",
+    " 19. offerwallProviders    enabled ==, rating desc       listOfferProviders() — src/server/earn/offerwall.ts.",
+    " 20. offerwallConversions  uid ==, createdAt desc        listConversions() — src/server/earn/offerwall.ts.",
+    " 21. lotteryTickets        uid ==, createdAt desc        getLotteryState() — src/server/earn/lottery.ts.",
+    " 22. lotteryTickets        round ==, status ==           drawLottery() — src/server/earn/lottery.ts and the draw job in functions/src/index.ts. Reads up to 20k Pending tickets for one round.",
+    " 23. lotteryTickets        uid ==, round ==              the per-round ticket cap aggregate in buyLotteryTickets().",
+    " 24. taskSessions          kind ==, itemId ==            openTaskSession() — src/server/earn/tasks.ts. Closes an open session before issuing another, which is what stops two tabs completing the same PTC view.",
+    " 25. chats                 mode ==, lastMessageAt asc    escalateStaleChat() — functions/src/index.ts. Finds AI conversations nobody answered; `resolved` is filtered in memory because a `!=` filter would exclude the documents where the field was never written, which is the normal state of exactly the set this job is looking for.",
+    "",
+    "NOT INDEXED ON PURPOSE, THOUGH IT LOOKS LIKE IT SHOULD BE:",
+    "  withdrawals  uid ==, status ==   onUserDeleted() runs this pair as two",
+    "    equality-only queries. Firestore serves equality-only filters by merging",
+    "    single-field indexes, and the row count per user is a handful. Its own",
+    "    comment in functions/src/index.ts says the same thing.",
+    "",
+    "FIELD OVERRIDES",
+    "  taskSessions.expiresAt   ASC at collection AND collection-group scope. The",
+    "    group scope is what makes a cross-user sweep for abandoned PTC/shortlink",
+    "    sessions possible at all — without it there is no way to ask 'every",
+    "    expired session belonging to anyone'.",
+    "  captchaTokens.expiresAt  ASC only, at collection scope. An override REPLACES",
+    "    the automatic behaviour, so this deliberately drops the descending index.",
+    "    This collection takes one write per solved captcha across the whole",
+    "    platform; halving its index writes is real money, and nothing ever asks",
+    "    for the newest expiry first.",
+    "  offerwallConversions.rawPayload  NOT indexed. It is the provider's raw",
+    "    payload: an arbitrary map whose keys we do not control. Firestore indexes",
+    "    every leaf of a map, so an unbounded key set means unbounded index",
+    "    entries, and a large payload can breach the 7.5 KiB index-entry limit and",
+    "    make the write FAIL. Never queried; retained for dispute resolution.",
+    "  claims.meta              NOT indexed. Same argument, on the hottest",
+    "    collection in the product.",
+    "  adUnits.html             NOT indexed. Ad snippets are multi-kilobyte and",
+    "    an indexed string that size can breach the same limit and reject the save,",
+    "    which would present as 'the admin console will not let me paste my tag'.",
+    "  messages.body            NOT indexed. Ticket and chat bodies: free text,",
+    "    never filtered on, and the collection group is shared by both.",
+    "",
+    "TTL POLICIES ARE NOT DECLARED HERE, ON PURPOSE. `captchaTokens.expiresAt` and",
+    "`taskSessions.expiresAt` both want a Firestore TTL policy. Whether the CLI",
+    "accepts a `ttl` flag in a field override depends on its version, and an",
+    "unknown property fails the entire deploy — so the policies are created out of",
+    "band. DEPLOY.md has the gcloud commands and the console path."
+  ],
+  "indexes": [
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "board", "order": "ASCENDING" },
+        { "fieldPath": "value", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "board", "order": "ASCENDING" },
+        { "fieldPath": "finalRank", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "board", "order": "ASCENDING" },
+        { "fieldPath": "value", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "claims",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "source", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "claims",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "source", "order": "ASCENDING" },
+        { "fieldPath": "day", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "claims",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "source", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "withdrawals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "withdrawals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "clientRequestId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "withdrawals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "withdrawals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "processedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "withdrawals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "rail", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "suspended", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "suspended", "order": "ASCENDING" },
+        { "fieldPath": "suspendedUntil", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tickets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tickets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ptcAds",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "enabled", "order": "ASCENDING" },
+        { "fieldPath": "tokens", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "shortlinks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "enabled", "order": "ASCENDING" },
+        { "fieldPath": "reward", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "challenges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "enabled", "order": "ASCENDING" },
+        { "fieldPath": "tokens", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "offerwallProviders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "enabled", "order": "ASCENDING" },
+        { "fieldPath": "rating", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "offerwallConversions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "lotteryTickets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "lotteryTickets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "round", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "lotteryTickets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "round", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "taskSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "itemId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "chats",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "mode", "order": "ASCENDING" },
+        { "fieldPath": "lastMessageAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "taskSessions",
+      "fieldPath": "expiresAt",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
+      "collectionGroup": "captchaTokens",
+      "fieldPath": "expiresAt",
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION" }]
+    },
+    {
+      "collectionGroup": "offerwallConversions",
+      "fieldPath": "rawPayload",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "claims",
+      "fieldPath": "meta",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "adUnits",
+      "fieldPath": "html",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "messages",
+      "fieldPath": "body",
+      "indexes": []
+    }
+  ]
+}
