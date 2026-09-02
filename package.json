@@ -1,8 +1,11 @@
 {
-  "name": "vie-next",
+  "name": "vazionix",
   "version": "1.0.0",
   "private": true,
-  "description": "Vie Faucet — premium redesign. Next.js 15 App Router + TypeScript + Tailwind + Firebase.",
+  "description": "Vazionix \u2014 earn crypto from a faucet, PTC ads, shortlinks and offerwalls. Next.js 15 + Firebase.",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
