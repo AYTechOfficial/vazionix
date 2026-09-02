@@ -10,7 +10,30 @@
    absolute and correct in all three.
    ========================================================================== */
 
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+/**
+ * Absolute origin, normalised. Never ends with a slash and ALWAYS carries a
+ * scheme.
+ *
+ * The scheme is forced because a schemeless value is the easy mistake — Vercel's
+ * own dashboard shows you `vazionix.vercel.app`, so that is what people paste in.
+ * `new URL('vazionix.vercel.app')` throws `ERR_INVALID_URL`, and because
+ * `metadataBase` in the root layout is a `new URL(brand.url)`, that throw happens
+ * during `next build`'s page-data collection: the whole deploy fails with an error
+ * that names `/_not-found` and never mentions the variable that caused it.
+ *
+ * Localhost keeps `http://`; everything else is assumed `https://`, since a
+ * production origin served over plain HTTP would break the Secure session cookie
+ * anyway.
+ */
+function normaliseSiteUrl(raw: string | undefined): string {
+  const value = (raw ?? '').trim().replace(/\/+$/, '');
+  if (!value) return 'http://localhost:3000';
+  if (/^https?:\/\//i.test(value)) return value;
+  const local = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(value);
+  return `${local ? 'http' : 'https'}://${value}`;
+}
+
+const SITE_URL = normaliseSiteUrl(process.env.NEXT_PUBLIC_SITE_URL);
 
 export const brand = {
   /** Full product name, used in titles, headings and legal copy. */
@@ -26,7 +49,7 @@ export const brand = {
   description:
     'Earn crypto from a faucet, PTC ads, shortlinks and offerwalls. Instant withdrawals via FaucetPay, CWallet and direct on-chain payouts.',
 
-  /** Absolute origin. Never ends with a slash. */
+  /** Absolute origin, scheme guaranteed. Never ends with a slash. */
   url: SITE_URL,
   /** Bare host for display ("vazionix.com"), derived so it cannot drift. */
   get domain(): string {
