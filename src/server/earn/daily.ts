@@ -4,6 +4,7 @@ import type { ChallengeItem, DailyState, DailyStep } from '@/lib/models';
 
 import { getEconomy, getSiteConfig } from '../config';
 import { AppError, bool, db, int, iso, isServerFirebaseReady, now, str, tooMany, weekKey } from '../db';
+import { isSupabaseBackend } from '@/lib/backend';
 import { credit, type CreditResult } from '../ledger';
 
 /* ============================================================================
@@ -33,15 +34,22 @@ export async function getDailyState(uid: string): Promise<DailyState> {
   const cfg = economy.daily;
   const steps: DailyStep[] = cfg.steps.map((s, i) => ({ day: i, ...s }));
 
-  const snap = await db().doc(`users/${uid}`).get();
-  const data = snap.exists ? (snap.data() as Record<string, unknown>) : {};
+  let data: Record<string, unknown> = {};
+  if (isSupabaseBackend) {
+    const { supabaseGetUser } = await import('../data-supabase');
+    const row = await supabaseGetUser(uid);
+    data = (row as Record<string, unknown>) ?? {};
+  } else {
+    const snap = await db().doc(`users/${uid}`).get();
+    data = snap.exists ? (snap.data() as Record<string, unknown>) : {};
+  }
 
-  const lastIso = iso(data.lastStreakClaimAt);
+  const lastIso = iso(isSupabaseBackend ? data.last_streak_claim_at : data.lastStreakClaimAt);
   const lastMs = lastIso ? Date.parse(lastIso) : 0;
   const hoursSince = lastMs ? (Date.now() - lastMs) / 3_600_000 : Infinity;
 
   const brokenStreak = hoursSince > cfg.breakAfterHours;
-  const streakDays = brokenStreak ? 0 : int(data.streakDays);
+  const streakDays = brokenStreak ? 0 : int(data.streak_days ?? data.streakDays);
   const current = Math.min(streakDays, steps.length - 1);
 
   const nextMs = lastMs ? lastMs + cfg.cooldownHours * 3_600_000 : 0;
@@ -64,12 +72,20 @@ export async function claimDailyBonus(args: { uid: string; ip: string | null }):
   if (!site.earningOpen) throw new AppError('Earning is paused right now.', 503, 'earning_paused');
 
   const cfg = economy.daily;
-  const userRef = db().doc(`users/${args.uid}`);
-  const snap = await userRef.get();
-  if (!snap.exists) throw new AppError('Account not found.', 404, 'not_found');
-  const data = snap.data() as Record<string, unknown>;
+  let data: Record<string, unknown>;
+  if (isSupabaseBackend) {
+    const { supabaseGetUser } = await import('../data-supabase');
+    const row = await supabaseGetUser(args.uid);
+    if (!row) throw new AppError('Account not found.', 404, 'not_found');
+    data = row as Record<string, unknown>;
+  } else {
+    const userRef = db().doc(`users/${args.uid}`);
+    const snap = await userRef.get();
+    if (!snap.exists) throw new AppError('Account not found.', 404, 'not_found');
+    data = snap.data() as Record<string, unknown>;
+  }
 
-  const lastIso = iso(data.lastStreakClaimAt);
+  const lastIso = iso(isSupabaseBackend ? data.last_streak_claim_at : data.lastStreakClaimAt);
   const lastMs = lastIso ? Date.parse(lastIso) : 0;
   const hoursSince = lastMs ? (Date.now() - lastMs) / 3_600_000 : Infinity;
 
@@ -83,7 +99,7 @@ export async function claimDailyBonus(args: { uid: string; ip: string | null }):
   }
 
   const brokenStreak = hoursSince > cfg.breakAfterHours;
-  const priorStreak = brokenStreak ? 0 : int(data.streakDays);
+  const priorStreak = brokenStreak ? 0 : int(data.streak_days ?? data.streakDays);
   const stepIndex = Math.min(priorStreak, cfg.steps.length - 1);
   const step = cfg.steps[stepIndex]!;
 
@@ -103,11 +119,17 @@ export async function claimDailyBonus(args: { uid: string; ip: string | null }):
   });
 
   const nextStreak = priorStreak + 1;
-  await userRef.update({
-    streakDays: nextStreak,
-    lastStreakClaimAt: now(),
-    updatedAt: now(),
-  });
+  if (isSupabaseBackend) {
+    const { supabaseUpdateUserStreak } = await import('../data-supabase');
+    await supabaseUpdateUserStreak(args.uid, nextStreak, new Date().toISOString());
+  } else {
+    const userRef = db().doc(`users/${args.uid}`);
+    await userRef.update({
+      streakDays: nextStreak,
+      lastStreakClaimAt: now(),
+      updatedAt: now(),
+    });
+  }
 
   const nextClaimAt = new Date(Date.now() + cfg.cooldownHours * 3_600_000).toISOString();
   return { ...result, step: stepIndex, streakDays: nextStreak, nextClaimAt };

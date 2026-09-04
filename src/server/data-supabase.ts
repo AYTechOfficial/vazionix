@@ -236,6 +236,32 @@ export async function supabaseInsertWithdrawal(row: Record<string, unknown>): Pr
   if (error) throw error;
 }
 
+/** Read a challenge by id. */
+export async function supabaseGetChallenge(id: string) {
+  const supabase = bc();
+  const { data, error } = await supabase.from('challenges').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+/** Enabled challenges, highest reward first. */
+export async function supabaseListChallenges() {
+  const supabase = bc();
+  const { data, error } = await supabase.from('challenges').select('*').eq('enabled', true).order('tokens', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Update a user's streak fields (daily bonus claim). */
+export async function supabaseUpdateUserStreak(uid: string, streakDays: number, lastStreakClaimAtIso: string): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase
+    .from('users')
+    .update({ streak_days: streakDays, last_streak_claim_at: lastStreakClaimAtIso, updated_at: new Date().toISOString() })
+    .eq('id', uid);
+  if (error) throw error;
+}
+
 /** Mark a user's unread notifications as read. */
 export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
   const supabase = bc();
