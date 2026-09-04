@@ -156,3 +156,5 @@ immediate and rebuilding it is not, so remove an index only when you are sure th
 query is gone. Functions roll back per-function through the console. The seeds never
 overwrite existing values, so re-running them is not a rollback path — restoring a
 changed economy value means editing it in Admin -> Modules.
+
+<!-- deployed-at: 2026-09-04T12:27:24Z -->
