@@ -11,6 +11,9 @@ import { Checkbox } from '@/components/ui/Checkbox';
 import { Divider } from '@/components/ui/Card';
 import { Field, FieldError, Hint, Input, Label } from '@/components/ui/Input';
 import { isFirebaseConfigured } from '@/lib/firebase/client';
+import { isFirebaseBackend, isSupabaseBackend } from '@/lib/backend';
+import { isSupabaseConfigured } from '@/lib/supabase/config';
+import { getAuthApi } from '@/lib/auth-api';
 import { brand } from '@/lib/brand';
 
 /* ============================================================================
@@ -70,8 +73,8 @@ export function RegisterForm() {
     setBusy('email');
     setError(null);
 
-    const { registerWithEmail } = await import('@/lib/firebase/auth');
-    const result = await registerWithEmail(
+    const auth = await getAuthApi();
+    const result = await auth.registerWithEmail(
       email.trim(),
       password,
       username.trim(),
@@ -98,8 +101,8 @@ export function RegisterForm() {
     setBusy('google');
     setError(null);
 
-    const { signInWithGoogle } = await import('@/lib/firebase/auth');
-    const result = await signInWithGoogle();
+    const auth = await getAuthApi();
+    const result = await auth.signInWithGoogle();
 
     if (result.ok) {
       router.push('/dashboard');
@@ -110,13 +113,14 @@ export function RegisterForm() {
     }
   };
 
-  if (!isFirebaseConfigured) {
+  if (isSupabaseBackend ? !isSupabaseConfigured : !isFirebaseConfigured) {
     return (
       <Alert tone="warning" icon={AlertTriangle}>
-        Firebase is not configured, so registration is unavailable. Copy{' '}
+        {(isSupabaseBackend ? 'Supabase' : 'Firebase')} is not configured, so registration is unavailable. Copy{' '}
         <code className="font-mono text-12">.env.example</code> to{' '}
         <code className="font-mono text-12">.env.local</code> and fill in the{' '}
-        <code className="font-mono text-12">NEXT_PUBLIC_FIREBASE_*</code> values.
+        <code className="font-mono text-12">{(isSupabaseBackend ? 'NEXT_PUBLIC_SUPABASE' : 'NEXT_PUBLIC_FIREBASE') + '_*'}</code>{' '}
+        values.
       </Alert>
     );
   }

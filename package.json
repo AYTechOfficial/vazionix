@@ -2,7 +2,7 @@
   "name": "vazionix",
   "version": "1.0.0",
   "private": true,
-  "description": "Vazionix \u2014 earn crypto from a faucet, PTC ads, shortlinks and offerwalls. Next.js 15 + Firebase.",
+  "description": "Vazionix — earn crypto from a faucet, PTC ads, shortlinks and offerwalls. Next.js 15 + Firebase.",
   "engines": {
     "node": ">=20.9.0"
   },
@@ -19,6 +19,8 @@
     "seed:catalogue": "node --env-file=.env.local scripts/seed-catalogue.mjs"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.5",
+    "@supabase/supabase-js": "^2.115.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "firebase": "^10.14.1",
@@ -27,6 +29,7 @@
     "gsap": "^3.13.0",
     "lucide-react": "^0.469.0",
     "next": "^15.5.0",
+    "pg": "^8.23.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "server-only": "^0.0.1",

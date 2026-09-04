@@ -27,6 +27,7 @@ import { metaFor } from '@/lib/nav';
 import { relative, tokens } from '@/lib/format';
 import { useCountUp, usePrefersReducedMotion } from '@/lib/hooks';
 import { endpoints } from '@/lib/api';
+import { getAuthApi } from '@/lib/auth-api';
 import type { AppNotification, CoinTicker } from '@/lib/models';
 import { IconButton } from '@/components/ui/Button';
 import { Kbd } from '@/components/ui/CommandPalette';
@@ -256,16 +257,11 @@ function AccountMenu() {
   const signOut = async () => {
     setSigningOut(true);
     try {
-      /* Two halves: clear the httpOnly cookie server-side (which also revokes the
-         refresh tokens) and drop the client SDK's own credential. Skipping either
-         leaves the user signed in somewhere. */
-      await fetch('/api/auth/session', { method: 'DELETE', credentials: 'include' });
-      const { getFirebaseAuth } = await import('@/lib/firebase/client');
-      const auth = getFirebaseAuth();
-      if (auth) {
-        const { signOut: fbSignOut } = await import('firebase/auth');
-        await fbSignOut(auth);
-      }
+      /* Sign out through the active backend's auth module: Supabase clears its
+         own httpOnly cookies client-side; Firebase posts DELETE to the session
+         route (revoking refresh tokens) and drops its SDK credential. */
+      const { signOutEverywhere } = await getAuthApi();
+      await signOutEverywhere();
     } finally {
       router.push('/login');
       router.refresh();

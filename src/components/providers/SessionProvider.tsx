@@ -4,6 +4,8 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 
 import { getDb, isFirebaseConfigured } from '@/lib/firebase/client';
+import { isSupabaseBackend, isFirebaseBackend } from '@/lib/backend';
+import { isSupabaseConfigured } from '@/lib/supabase/config';
 import { earningBonusBps, levelFromExp, DEFAULT_ECONOMY } from '@/lib/config/economy';
 import { endpoints, SESSION_EXPIRED_EVENT } from '@/lib/api';
 import type { CoinTicker, UserProfile } from '@/lib/models';
@@ -75,66 +77,87 @@ export function SessionProvider({ children, initialProfile }: SessionProviderPro
 
   /* ---- LIVE PROFILE ------------------------------------------------------- */
   React.useEffect(() => {
-    if (!uid || !isFirebaseConfigured) return;
+    if (!uid) return;
 
-    let unsubscribe: (() => void) | undefined;
-    let cancelled = false;
+    // Firebase backend: a Firestore onSnapshot delivers pushed balance changes.
+    if (isFirebaseBackend && isFirebaseConfigured) {
+      let unsubscribe: (() => void) | undefined;
+      let cancelled = false;
 
-    void (async () => {
-      const db = getDb();
-      if (!db) return;
-      const { doc, onSnapshot } = await import('firebase/firestore');
-      if (cancelled) return;
+      void (async () => {
+        const db = getDb();
+        if (!db) return;
+        const { doc, onSnapshot } = await import('firebase/firestore');
+        if (cancelled) return;
 
-      unsubscribe = onSnapshot(
-        doc(db, 'users', uid),
-        (snap) => {
-          const data = snap.data();
-          if (!data) return;
+        unsubscribe = onSnapshot(
+          doc(db, 'users', uid),
+          (snap) => {
+            const data = snap.data();
+            if (!data) return;
 
-          /* Only the server-owned numbers are taken from the snapshot. Anything
-             derived (level thresholds, bonus percent) is recomputed from the same
-             config the server used, so the progress bar cannot disagree with the
-             level that produced it. */
-          const totalExp = Number(data.totalExp ?? data.exp ?? 0);
-          const { level, exp, expNext } = levelFromExp(totalExp, DEFAULT_ECONOMY.levels);
-          const streak = Number(data.streakDays ?? 0);
+            /* Only the server-owned numbers are taken from the snapshot. Anything
+               derived (level thresholds, bonus percent) is recomputed from the same
+               config the server used, so the progress bar cannot disagree with the
+               level that produced it. */
+            const totalExp = Number(data.totalExp ?? data.exp ?? 0);
+            const { level, exp, expNext } = levelFromExp(totalExp, DEFAULT_ECONOMY.levels);
+            const streak = Number(data.streakDays ?? 0);
 
-          setProfile((current) =>
-            current
-              ? {
-                  ...current,
-                  balance: Number(data.balance ?? current.balance),
-                  lockedBalance: Number(data.lockedBalance ?? current.lockedBalance),
-                  depositBalance: Number(data.depositBalance ?? current.depositBalance),
-                  totalEarned: Number(data.totalEarned ?? current.totalEarned),
-                  level,
-                  exp,
-                  expNext,
-                  streak,
-                  earningBonus:
-                    Number(data.earningBonusBps ?? earningBonusBps(level, streak, DEFAULT_ECONOMY.levels)) / 100,
-                  suspended: data.suspended === true,
-                  username: typeof data.username === 'string' ? data.username : current.username,
-                  referralTier: current.tier,
-                  tier: (data.referralTier ?? current.tier) as UserProfile['tier'],
-                  commissionRate: Number(data.commissionBps ?? current.commissionRate * 100) / 100,
-                } as UserProfile
-              : current,
-          );
-        },
-        (error) => {
-          /* A rules failure here means the user document is not readable, which
-             is a configuration problem worth surfacing once rather than silently
-             leaving a stale balance on screen. */
-          console.error('[session] profile listener failed', error);
-        },
-      );
-    })();
+            setProfile((current) =>
+              current
+                ? {
+                    ...current,
+                    balance: Number(data.balance ?? current.balance),
+                    lockedBalance: Number(data.lockedBalance ?? current.lockedBalance),
+                    depositBalance: Number(data.depositBalance ?? current.depositBalance),
+                    totalEarned: Number(data.totalEarned ?? current.totalEarned),
+                    level,
+                    exp,
+                    expNext,
+                    streak,
+                    earningBonus:
+                      Number(data.earningBonusBps ?? earningBonusBps(level, streak, DEFAULT_ECONOMY.levels)) / 100,
+                    suspended: data.suspended === true,
+                    username: typeof data.username === 'string' ? data.username : current.username,
+                    referralTier: current.tier,
+                    tier: (data.referralTier ?? current.tier) as UserProfile['tier'],
+                    commissionRate: Number(data.commissionBps ?? current.commissionRate * 100) / 100,
+                  } as UserProfile
+                : current,
+            );
+          },
+          (error) => {
+            /* A rules failure here means the user document is not readable, which
+               is a configuration problem worth surfacing once rather than silently
+               leaving a stale balance on screen. */
+            console.error('[session] profile listener failed', error);
+          },
+        );
+      })();
 
+      return () => {
+        cancelled = true;
+        unsubscribe?.();
+      };
+    }
+
+    // Supabase backend (or Firebase unconfigured): no pushed listener, so poll
+    // /api/account on an interval so pushed-looking updates still land.
+    let alive = true;
+    const poll = async () => {
+      try {
+        const { profile: next } = await endpoints.profile();
+        if (alive && next) setProfile(next);
+      } catch {
+        // Ignore transient failures; keep the last known profile.
+      }
+    };
+    void poll();
+    const id = window.setInterval(poll, 15000);
     return () => {
-      cancelled = true;
-      unsubscribe?.();
+      alive = false;
+      window.clearInterval(id);
     };
   }, [uid]);
 

@@ -4,6 +4,7 @@ import * as React from 'react';
 import { Check, Save } from 'lucide-react';
 
 import { ApiError, endpoints } from '@/lib/api';
+import { getAuthApi } from '@/lib/auth-api';
 import { COIN_TICKERS, type CoinTicker, type UserProfile } from '@/lib/models';
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
@@ -231,8 +232,8 @@ export function AccountSettings({ profile: initial }: { profile: UserProfile }) 
 }
 
 async function requestReset(email: string, toast: (m: string, t?: 'success' | 'danger') => void) {
-  const { resetPassword } = await import('@/lib/firebase/auth');
-  const result = await resetPassword(email);
+  const auth = await getAuthApi();
+  const result = await auth.resetPassword(email);
   toast(
     result.ok ? `Reset link sent to ${email}` : (result.message ?? 'Could not send that email'),
     result.ok ? 'success' : 'danger',
@@ -240,12 +241,7 @@ async function requestReset(email: string, toast: (m: string, t?: 'success' | 'd
 }
 
 async function signOutEverywhere() {
-  await fetch('/api/auth/session', { method: 'DELETE', credentials: 'include' });
-  const { getFirebaseAuth } = await import('@/lib/firebase/client');
-  const auth = getFirebaseAuth();
-  if (auth) {
-    const { signOut } = await import('firebase/auth');
-    await signOut(auth);
-  }
+  const auth = await getAuthApi();
+  await auth.signOutEverywhere();
   window.location.href = '/login';
 }

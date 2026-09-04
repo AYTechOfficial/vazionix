@@ -8,6 +8,7 @@ import { ChevronRight, Flame, LogOut, PanelLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { brand } from '@/lib/brand';
 import { DASHBOARD_ITEM, NAV, isActiveRoute, type NavItem } from '@/lib/nav';
+import { getAuthApi } from '@/lib/auth-api';
 import { ButtonLink } from '@/components/ui/Button';
 import { Kbd } from '@/components/ui/CommandPalette';
 import { BrandMark } from '@/components/brand/BrandMark';
@@ -46,13 +47,8 @@ export function Sidebar({
   const streak = profile?.streak ?? 0;
 
   const signOut = async () => {
-    await fetch('/api/auth/session', { method: 'DELETE', credentials: 'include' });
-    const { getFirebaseAuth } = await import('@/lib/firebase/client');
-    const auth = getFirebaseAuth();
-    if (auth) {
-      const { signOut: fbSignOut } = await import('firebase/auth');
-      await fbSignOut(auth);
-    }
+    const { signOutEverywhere } = await getAuthApi();
+    await signOutEverywhere();
     router.push('/login');
     router.refresh();
   };

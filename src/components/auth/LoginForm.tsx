@@ -12,6 +12,9 @@ import { Divider } from '@/components/ui/Card';
 import { Field, FieldError, Hint, Input, Label } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { isFirebaseConfigured } from '@/lib/firebase/client';
+import { isSupabaseConfigured } from '@/lib/supabase/config';
+import { isFirebaseBackend, isSupabaseBackend } from '@/lib/backend';
+import { getAuthApi } from '@/lib/auth-api';
 
 /* ============================================================================
    SIGN-IN FORM
@@ -59,8 +62,8 @@ export function LoginForm() {
     setBusy('email');
     setError(null);
 
-    const { signInWithEmail } = await import('@/lib/firebase/auth');
-    const result = await signInWithEmail(email.trim(), password);
+    const auth = await getAuthApi();
+    const result = await auth.signInWithEmail(email.trim(), password);
 
     if (result.ok) finish();
     else {
@@ -73,8 +76,8 @@ export function LoginForm() {
     setBusy('google');
     setError(null);
 
-    const { signInWithGoogle } = await import('@/lib/firebase/auth');
-    const result = await signInWithGoogle();
+    const auth = await getAuthApi();
+    const result = await auth.signInWithGoogle();
 
     if (result.ok) finish();
     else {
@@ -83,13 +86,14 @@ export function LoginForm() {
     }
   };
 
-  if (!isFirebaseConfigured) {
+  if (isSupabaseBackend ? !isSupabaseConfigured : !isFirebaseConfigured) {
     return (
       <Alert tone="warning" icon={AlertTriangle}>
-        Firebase is not configured, so sign-in is unavailable. Copy{' '}
+        {isSupabaseBackend ? 'Supabase' : 'Firebase'} is not configured, so sign-in is unavailable. Copy{' '}
         <code className="font-mono text-12">.env.example</code> to{' '}
         <code className="font-mono text-12">.env.local</code> and fill in the{' '}
-        <code className="font-mono text-12">NEXT_PUBLIC_FIREBASE_*</code> values.
+        <code className="font-mono text-12">{(isSupabaseBackend ? 'NEXT_PUBLIC_SUPABASE' : 'NEXT_PUBLIC_FIREBASE') + '_*'}</code>{' '}
+        values.
       </Alert>
     );
   }
@@ -197,8 +201,8 @@ function ResetModal({
   const send = async () => {
     setState('sending');
     setError(null);
-    const { resetPassword } = await import('@/lib/firebase/auth');
-    const result = await resetPassword(email.trim());
+    const auth = await getAuthApi();
+    const result = await auth.resetPassword(email.trim());
     if (result.ok) setState('sent');
     else {
       setError(result.message ?? 'Could not send that email.');

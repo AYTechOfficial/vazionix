@@ -8,6 +8,9 @@ import { cn } from '@/lib/utils';
 import { brand } from '@/lib/brand';
 import { ROLES, ADMIN_ROLES } from '@/lib/admin/rbac';
 import { isFirebaseConfigured } from '@/lib/firebase/client';
+import { isFirebaseBackend, isSupabaseBackend } from '@/lib/backend';
+import { isSupabaseConfigured } from '@/lib/supabase/config';
+import { getAuthApi } from '@/lib/auth-api';
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
 import { Field, FieldError, Hint, Input, Label } from '@/components/ui/Input';
@@ -63,8 +66,8 @@ export function AdminLoginForm({ next }: { next: string }) {
 
     setPending(true);
 
-    const { signInWithEmail } = await import('@/lib/firebase/auth');
-    const result = await signInWithEmail(email.trim(), password);
+    const auth = await getAuthApi();
+    const result = await auth.signInWithEmail(email.trim(), password);
 
     if (!result.ok) {
       setError(result.message ?? 'Could not sign you in.');
@@ -104,12 +107,13 @@ export function AdminLoginForm({ next }: { next: string }) {
           support can never move funds.
         </Alert>
 
-        {!isFirebaseConfigured ? (
+        {(isSupabaseBackend ? !isSupabaseConfigured : !isFirebaseConfigured) ? (
           <Alert tone="danger" className="mb-5">
-            Firebase is not configured, so nobody can sign in. Set the{' '}
-            <code className="font-mono text-12">NEXT_PUBLIC_FIREBASE_*</code> values and{' '}
-            <code className="font-mono text-12">FIREBASE_SERVICE_ACCOUNT_KEY</code>, then bootstrap the first
-            admin with <code className="font-mono text-12">npm run bootstrap:admin</code>.
+            {(isSupabaseBackend ? 'Supabase' : 'Firebase')} is not configured, so nobody can sign in. Set the{' '}
+            <code className="font-mono text-12">{(isSupabaseBackend ? 'NEXT_PUBLIC_SUPABASE' : 'NEXT_PUBLIC_FIREBASE') + '_*'}</code>{' '}
+            values and{' '}
+            <code className="font-mono text-12">{isSupabaseBackend ? 'SUPABASE_SERVICE_ROLE_KEY' : 'FIREBASE_SERVICE_ACCOUNT_KEY'}</code>, then bootstrap the first
+            admin.
           </Alert>
         ) : null}
 
@@ -147,7 +151,7 @@ export function AdminLoginForm({ next }: { next: string }) {
             </FieldError>
           ) : null}
 
-          <Button type="submit" variant="primary" size="lg" block disabled={pending || !isFirebaseConfigured}>
+          <Button type="submit" variant="primary" size="lg" block disabled={pending || (isSupabaseBackend ? !isSupabaseConfigured : !isFirebaseConfigured)}>
             <Lock aria-hidden="true" />
             {pending ? 'Signing in…' : 'Sign in'}
           </Button>
