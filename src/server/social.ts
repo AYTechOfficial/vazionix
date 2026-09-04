@@ -13,6 +13,7 @@ import type {
 } from '@/lib/models';
 
 import { getEconomy } from './config';
+import { isSupabaseBackend } from '@/lib/backend';
 import { db, int, iso, isoOr, isServerFirebaseReady, num, str, weekKey } from './db';
 import { countryName } from './users';
 
@@ -59,9 +60,34 @@ export async function getLeaderboard(
     you: { rank: null, value: 0 },
     rows: [],
   };
-  if (!isServerFirebaseReady()) return empty;
+  if (!isServerFirebaseReady() && !isSupabaseBackend) return empty;
 
   try {
+    if (isSupabaseBackend) {
+      const { supabaseGetBoardEntries, supabaseGetViewerBoardEntry } = await import('./data-supabase');
+      const rows = await supabaseGetBoardEntries(board, Math.min(size, economy.leaderboard.size));
+      const curve = economy.leaderboard.payoutCurveBps;
+      const pool = economy.leaderboard.prizePoolPerBoard;
+      const list: LeaderboardRow[] = rows.map((data, index) => {
+        const bps = curve[index] ?? 0;
+        return {
+          uid: String(data.user_id ?? ''),
+          username: String(data.username ?? 'member'),
+          countryCode: String(data.country_code ?? 'XX'),
+          value: Number(data.value ?? 0),
+          prize: Math.floor((pool * bps) / 10_000),
+          rank: index + 1,
+        };
+      });
+      const mine = viewerUid ? list.find((r) => r.uid === viewerUid) : undefined;
+      let you = mine ? { rank: mine.rank, value: mine.value } : { rank: null as number | null, value: 0 };
+      if (viewerUid && !mine) {
+        const own = await supabaseGetViewerBoardEntry(viewerUid, board);
+        if (own) you = { rank: null, value: Number(own.value ?? 0) };
+      }
+      return { key: board, metric: meta.metric, unit: meta.unit, you, rows: list };
+    }
+
     const snap = await db()
       .collection('leaderboard/current/entries')
       .where('board', '==', board)

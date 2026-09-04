@@ -154,6 +154,34 @@ export async function supabaseGetDailyStats(days: number): Promise<Array<Record<
   return data ?? [];
 }
 
+/** Leaderboard entries for a board, highest value first. */
+export async function supabaseGetBoardEntries(board: string, limit: number) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('leaderboard_entries')
+    .select('*')
+    .eq('board', board)
+    .eq('period', 'current')
+    .order('value', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** A single viewer's entry on a board (the "you" strip). */
+export async function supabaseGetViewerBoardEntry(uid: string, board: string) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('leaderboard_entries')
+    .select('*')
+    .eq('board', board)
+    .eq('period', 'current')
+    .eq('user_id', uid)
+    .maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
 /** Mark a user's unread notifications as read. */
 export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
   const supabase = bc();
