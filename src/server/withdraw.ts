@@ -14,6 +14,7 @@ import type {
 
 import { assertCaptcha } from './captcha';
 import { getEconomy, getPayoutRails, getRates, getSiteConfig } from './config';
+import { isSupabaseBackend } from '@/lib/backend';
 import {
   AppError,
   FieldValue,
@@ -395,6 +396,26 @@ function recordFrom(id: string, data: Record<string, unknown>): WithdrawalRecord
 }
 
 export async function listWithdrawals(uid: string, limit = 25): Promise<WithdrawalRecord[]> {
+  if (isSupabaseBackend) {
+    const { supabaseListWithdrawals } = await import('./data-supabase');
+    const rows = await supabaseListWithdrawals(uid, limit);
+    return rows.map((d) => ({
+      id: String(d.id ?? ''),
+      coin: (String(d.coin ?? 'USDT') as CoinTicker),
+      rail: (String(d.rail ?? 'FaucetPay') as PayoutRailName),
+      network: String(d.network ?? ''),
+      address: String(d.address ?? ''),
+      amount: String(d.amount ?? '0'),
+      fee: String(d.fee ?? '0'),
+      receiveAmount: String(d.receive_amount ?? d.amount ?? '0'),
+      tokenCost: Number(d.token_cost ?? 0),
+      status: (String(d.status ?? 'Pending') as WithdrawalStatus),
+      txid: d.txid ? String(d.txid) : null,
+      at: d.created_at ? new Date(d.created_at as string).toISOString() : new Date().toISOString(),
+      processedAt: d.processed_at ? new Date(d.processed_at as string).toISOString() : null,
+      failureReason: d.failure_reason ? String(d.failure_reason) : null,
+    }));
+  }
   if (!isServerFirebaseReady()) return [];
   const snap = await db()
     .collection('withdrawals')
@@ -408,6 +429,18 @@ export async function listWithdrawals(uid: string, limit = 25): Promise<Withdraw
 /* ---- SAVED ADDRESSES ----------------------------------------------------- */
 
 export async function listAddresses(uid: string): Promise<SavedAddress[]> {
+  if (isSupabaseBackend) {
+    const { supabaseListAddresses } = await import('./data-supabase');
+    const rows = await supabaseListAddresses(uid);
+    return rows.map((d) => ({
+      id: String(d.id ?? ''),
+      label: String(d.label ?? 'Saved address'),
+      address: String(d.address ?? ''),
+      coin: (String(d.coin ?? 'USDT') as CoinTicker),
+      rail: (String(d.rail ?? 'FaucetPay') as PayoutRailName),
+      lastUsedAt: d.last_used_at ? new Date(d.last_used_at as string).toISOString() : null,
+    }));
+  }
   if (!isServerFirebaseReady()) return [];
   const snap = await db()
     .collection(`users/${uid}/addresses`)
@@ -435,6 +468,23 @@ export async function saveAddress(
   /* Keyed on the address so saving the same one twice updates rather than
      duplicating the list. */
   const id = Buffer.from(`${input.coin}:${input.address}`).toString('base64url').slice(0, 60);
+  if (isSupabaseBackend) {
+    const { getServerSupabase } = await import('./supabase');
+    await getServerSupabase().from('saved_addresses').upsert(
+      {
+        id,
+        user_id: uid,
+        label: input.label,
+        address: input.address,
+        coin: input.coin,
+        rail: input.rail,
+        last_used_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' },
+    );
+    return;
+  }
   await db().doc(`users/${uid}/addresses/${id}`).set(
     {
       label: input.label,
@@ -450,5 +500,10 @@ export async function saveAddress(
 }
 
 export async function deleteAddress(uid: string, id: string): Promise<void> {
+  if (isSupabaseBackend) {
+    const { getServerSupabase } = await import('./supabase');
+    await getServerSupabase().from('saved_addresses').delete().eq('id', id).eq('user_id', uid);
+    return;
+  }
   await db().doc(`users/${uid}/addresses/${id}`).delete();
 }

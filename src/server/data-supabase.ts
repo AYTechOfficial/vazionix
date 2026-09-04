@@ -182,6 +182,27 @@ export async function supabaseGetViewerBoardEntry(uid: string, board: string) {
   return data ?? null;
 }
 
+/** A user's withdrawals, newest first. */
+export async function supabaseListWithdrawals(uid: string, limit = 25) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('withdrawals')
+    .select('*')
+    .eq('user_id', uid)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** A user's saved addresses, newest first. */
+export async function supabaseListAddresses(uid: string) {
+  const supabase = bc();
+  const { data, error } = await supabase.from('saved_addresses').select('*').eq('user_id', uid).order('created_at', { ascending: false }).limit(20);
+  if (error) throw error;
+  return data ?? [];
+}
+
 /** Mark a user's unread notifications as read. */
 export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
   const supabase = bc();
