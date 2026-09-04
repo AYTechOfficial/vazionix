@@ -506,6 +506,28 @@ export async function listLedger(
 ): Promise<LedgerPage> {
   const limit = Math.min(100, Math.max(1, options.limit ?? 25));
 
+  if (isSupabaseBackend) {
+    const { supabaseListClaims } = await import('./data-supabase');
+    const rows = await supabaseListClaims(uid, {
+      limit,
+      source: options.source ?? null,
+      cursorIso: options.cursor ?? null,
+    });
+    const hasMore = rows.length > limit;
+    const docs = rows.slice(0, limit);
+    const entries: LedgerEntry[] = docs.map((d) => ({
+      id: String(d.id ?? ''),
+      source: (d.source ?? 'bonus') as ClaimSource,
+      amount: d.amount ?? 0,
+      exp: d.exp ?? 0,
+      refId: d.ref_id ? String(d.ref_id) : null,
+      label: d.label ? String(d.label) : SOURCE_LABEL[d.source ?? 'bonus'] ?? 'Credit',
+      at: d.created_at ? new Date(d.created_at).toISOString() : new Date().toISOString(),
+    }));
+    const last = entries[entries.length - 1];
+    return { entries, cursor: hasMore && last ? last.at : null };
+  }
+
   let query = db()
     .collection(`users/${uid}/claims`)
     .orderBy('createdAt', 'desc')
@@ -561,19 +583,40 @@ export async function earningsByDay(
   uid: string,
   days = 14,
 ): Promise<Array<{ day: string; faucet: number; ptc: number; offerwall: number; bonus: number; challenge: number }>> {
-  const since = new Date(Date.now() - days * 86400000);
+  const daysN = Math.max(1, Math.min(90, days));
+  const buckets = new Map<string, { faucet: number; ptc: number; offerwall: number; bonus: number; challenge: number }>();
+  for (let i = daysN - 1; i >= 0; i--) {
+    buckets.set(dayKey(new Date(Date.now() - i * 86400000)), { faucet: 0, ptc: 0, offerwall: 0, bonus: 0, challenge: 0 });
+  }
+
+  if (isSupabaseBackend) {
+    const { supabaseEarningsByDay } = await import('./data-supabase');
+    const rows = await supabaseEarningsByDay(uid, daysN);
+    for (const r of rows) {
+      const key = r.day ? String(r.day) : (r.created_at ? new Date(r.created_at).toISOString().slice(0, 10) : '');
+      const bucket = buckets.get(key);
+      if (!bucket) continue;
+      const amount = r.amount ?? 0;
+      if (amount <= 0) continue;
+      switch (String(r.source)) {
+        case 'faucet': bucket.faucet += amount; break;
+        case 'ptc': bucket.ptc += amount; break;
+        case 'offerwall': bucket.offerwall += amount; break;
+        case 'shortlink': bucket.offerwall += amount; break;
+        case 'challenge': bucket.challenge += amount; break;
+        default: bucket.bonus += amount; break;
+      }
+    }
+    return [...buckets.entries()].map(([day, v]) => ({ day, ...v }));
+  }
+
+  const since = new Date(Date.now() - daysN * 86400000);
   const snap = await db()
     .collection(`users/${uid}/claims`)
     .where('createdAt', '>=', since)
     .orderBy('createdAt', 'asc')
     .limit(3000)
     .get();
-
-  const buckets = new Map<string, { faucet: number; ptc: number; offerwall: number; bonus: number; challenge: number }>();
-  for (let i = days - 1; i >= 0; i--) {
-    const key = dayKey(new Date(Date.now() - i * 86400000));
-    buckets.set(key, { faucet: 0, ptc: 0, offerwall: 0, bonus: 0, challenge: 0 });
-  }
 
   for (const doc of snap.docs) {
     const data = doc.data();

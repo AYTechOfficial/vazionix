@@ -380,6 +380,20 @@ export async function pushNotification(
   n: { icon: AppNotification['icon']; tone: AppNotification['tone']; title: string; body: string; href?: string | null },
 ): Promise<void> {
   try {
+    if (isSupabaseBackend) {
+      const { supabaseInsertNotification } = await import('./data-supabase');
+      await supabaseInsertNotification(uid, {
+        icon: n.icon,
+        tone: n.tone,
+        title: n.title,
+        body: n.body,
+        href: n.href ?? null,
+        read: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      return;
+    }
     await db().collection(`users/${uid}/notifications`).add({
       icon: n.icon,
       tone: n.tone,
@@ -397,6 +411,20 @@ export async function pushNotification(
 }
 
 export async function listNotifications(uid: string, limit = 20): Promise<AppNotification[]> {
+  if (isSupabaseBackend) {
+    const { supabaseListNotifications } = await import('./data-supabase');
+    const rows = await supabaseListNotifications(uid, limit);
+    return rows.map((d) => ({
+      id: String(d.id ?? ''),
+      icon: (String(d.icon ?? 'coins') as AppNotification['icon']),
+      tone: (String(d.tone ?? 'info') as AppNotification['tone']),
+      title: String(d.title ?? ''),
+      body: String(d.body ?? ''),
+      href: d.href ? String(d.href) : null,
+      at: d.created_at ? new Date(d.created_at).toISOString() : new Date().toISOString(),
+      unread: !d.read,
+    }));
+  }
   const snap = await db()
     .collection(`users/${uid}/notifications`)
     .orderBy('createdAt', 'desc')
@@ -419,6 +447,11 @@ export async function listNotifications(uid: string, limit = 20): Promise<AppNot
 }
 
 export async function markNotificationsRead(uid: string): Promise<void> {
+  if (isSupabaseBackend) {
+    const { supabaseMarkNotificationsRead } = await import('./data-supabase');
+    await supabaseMarkNotificationsRead(uid);
+    return;
+  }
   const snap = await db()
     .collection(`users/${uid}/notifications`)
     .where('read', '==', false)

@@ -3,6 +3,7 @@ import 'server-only';
 import { cache } from 'react';
 
 import type { CoinTicker, PayoutTickerRow, PlatformStats } from '@/lib/models';
+import { isSupabaseBackend } from '@/lib/backend';
 
 import { getRates } from './config';
 import { FieldValue, dayKey, db, int, iso, isServerFirebaseReady, now, num, str } from './db';
@@ -104,6 +105,29 @@ async function countOnline(): Promise<number> {
  * per-visitor Firestore read.
  */
 export const getPlatformStats = cache(async (): Promise<PlatformStats> => {
+  if (isSupabaseBackend) {
+    const { supabaseGetStats, supabaseCountOnline } = await import('./data-supabase');
+    const [global, today, online] = await Promise.all([
+      supabaseGetStats('global'),
+      supabaseGetStats(dayKey()),
+      supabaseCountOnline(5),
+    ]);
+    const g = global ?? {};
+    const t = today ?? {};
+    return {
+      members: num(g.members),
+      membersToday: num(t.members_today),
+      claimsAllTime: num(g.claims),
+      claimsToday: num(t.claims),
+      tokensPaidAllTime: num(g.tokens_credited),
+      paidOutUsd: num(g.usd_withdrawn),
+      withdrawalsAllTime: num(g.withdrawals),
+      withdrawalsToday: num(t.withdrawals),
+      onlineNow: online,
+      updatedAt: g.updated_at ? new Date(g.updated_at as string).toISOString() : new Date().toISOString(),
+    };
+  }
+
   const [global, today, online] = await Promise.all([
     readCounters(GLOBAL),
     readCounters(`stats/daily/days/${dayKey()}`),
@@ -130,6 +154,27 @@ export const getPlatformStats = cache(async (): Promise<PlatformStats> => {
  * chain; addresses and amounts in USD are not exposed.
  */
 export const getPayoutTicker = cache(async (limit = 12): Promise<PayoutTickerRow[]> => {
+  if (isSupabaseBackend) {
+    const { supabaseGetCompletedWithdrawals } = await import('./data-supabase');
+    try {
+      const rows = await supabaseGetCompletedWithdrawals(limit);
+      return rows.map((d) => {
+        const u = typeof d.username === 'string' ? d.username : 'member';
+        return {
+          username: u,
+          countryCode: String(d.country_code ?? 'XX'),
+          amount: String(d.receive_amount ?? d.amount ?? '0'),
+          coin: (String(d.coin ?? 'USDT') as CoinTicker),
+          at: d.processed_at ? new Date(d.processed_at as string).toISOString()
+             : d.created_at ? new Date(d.created_at as string).toISOString()
+             : new Date().toISOString(),
+        };
+      });
+    } catch (error) {
+      console.error('[stats] supabase payout ticker failed', error);
+      return [];
+    }
+  }
   if (!isServerFirebaseReady()) return [];
   try {
     const snap = await db()
@@ -173,6 +218,27 @@ export interface DailyStatRow {
 }
 
 export async function getDailySeries(days = 30): Promise<DailyStatRow[]> {
+  if (isSupabaseBackend) {
+    const { supabaseGetDailyStats } = await import('./data-supabase');
+    try {
+      const rows = await supabaseGetDailyStats(days);
+      return rows.map((d) => ({
+        day: String(d.day ?? ''),
+        members: num(d.members_today),
+        claims: num(d.claims),
+        tokensCredited: num(d.tokens_credited),
+        withdrawals: num(d.withdrawals),
+        usdWithdrawn: num(d.usd_withdrawn),
+        adImpressions: num(d.ad_impressions),
+        ptcViews: num(d.ptc_views),
+        shortlinkClaims: num(d.shortlink_claims),
+        offerwallConversions: num(d.offerwall_conversions),
+      }));
+    } catch (error) {
+      console.error('[stats] supabase daily series failed', error);
+      return [];
+    }
+  }
   if (!isServerFirebaseReady()) return [];
   try {
     const snap = await db()

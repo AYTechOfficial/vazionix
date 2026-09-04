@@ -106,3 +106,90 @@ export async function supabaseListNotifications(uid: string, limit = 20) {
   if (error) throw error;
   return data ?? [];
 }
+
+/** Create a notification row (fire-and-forget from the caller). */
+export async function supabaseInsertNotification(uid: string, n: Record<string, unknown>): Promise<void> {
+  const supabase = bc();
+  await supabase.from('notifications').insert({ user_id: uid, ...n });
+}
+
+/** Read a stats row (edge key 'global' or 'YYYY-MM-DD'). */
+export async function supabaseGetStats(day: string): Promise<Record<string, unknown> | null> {
+  const supabase = bc();
+  const { data, error } = await supabase.from('stats').select('*').eq('day', day).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+/** Count of users active in the last N minutes (online-now). */
+export async function supabaseCountOnline(minutes: number): Promise<number> {
+  const supabase = bc();
+  const since = new Date(Date.now() - minutes * 60000).toISOString();
+  const { count, error } = await supabase
+    .from('users')
+    .select('id', { count: 'exact', head: true })
+    .gte('last_seen_at', since);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+/** Completed withdrawals for the payout ticker, newest first. */
+export async function supabaseGetCompletedWithdrawals(limit = 12) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('withdrawals')
+    .select('*')
+    .eq('status', 'Completed')
+    .order('processed_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Daily stats in ascending day order (newest N days). */
+export async function supabaseGetDailyStats(days: number): Promise<Array<Record<string, unknown>>> {
+  const supabase = bc();
+  const { data, error } = await supabase.from('stats').select('*').order('day', { ascending: true }).limit(days);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Mark a user's unread notifications as read. */
+export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
+  const supabase = bc();
+  await supabase.from('notifications').update({ read: true, updated_at: new Date().toISOString() }).eq('user_id', uid).eq('read', false);
+}
+
+/** Ledger rows for a user, newest first, optional source filter + cursor. */
+export async function supabaseListClaims(
+  uid: string,
+  opts: { limit?: number; source?: string | null; cursorIso?: string | null },
+) {
+  const supabase = bc();
+  let q = supabase
+    .from('claims')
+    .select('*')
+    .eq('user_id', uid)
+    .order('created_at', { ascending: false })
+    .limit((opts.limit ?? 25) + 1);
+  if (opts.source) q = q.eq('source', opts.source);
+  if (opts.cursorIso) q = q.lt('created_at', opts.cursorIso);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Per-source totals over the last N days, for the dashboard earnings chart. */
+export async function supabaseEarningsByDay(uid: string, days: number) {
+  const supabase = bc();
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const { data, error } = await supabase
+    .from('claims')
+    .select('amount, source, created_at, day')
+    .eq('user_id', uid)
+    .gte('created_at', since)
+    .order('created_at', { ascending: true })
+    .limit(3000);
+  if (error) throw error;
+  return data ?? [];
+}
