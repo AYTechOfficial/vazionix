@@ -107,7 +107,15 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  /* Everything except static assets and the image optimiser: the referral capture
-     has to run on the landing page, which is where shared links point. */
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)'],
+  /* Everything except static assets, the image optimiser, and any path with a
+     file extension. The referral capture has to run on the landing page, which is
+     where shared links point, so this cannot be narrowed to `/admin`.
+
+     The extension exclusion matters for more than performance: ad networks and
+     search engines verify ownership by fetching a file like
+     `/6a9922b254e3a41fe63104ef.html` from `public/`. Those requests must reach the
+     static handler without a middleware invocation deciding anything about them. */
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|.*\\.[a-zA-Z0-9]+$).*)',
+  ],
 };
