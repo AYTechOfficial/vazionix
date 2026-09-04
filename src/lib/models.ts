@@ -164,7 +164,12 @@ export interface SavedAddress {
 
 export interface FaucetState {
   rewardTokens: number;
+  /** Representative EXP for display; equals `expMin` when a range applies. */
   exp: number;
+  /** Lower bound of the EXP roll for this user's current tier. */
+  expMin: number;
+  /** Upper bound of the EXP roll. Equal to `expMin` when EXP is flat. */
+  expMax: number;
   cooldownSeconds: number;
   /** ISO of the next allowed claim, or null when claimable now. */
   nextClaimAt: string | null;

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { FaucetState } from '@/lib/models';
+import { faucetExpRange, rollFaucetExp } from '@/lib/config/economy';
 
 import { assertCaptcha } from '../captcha';
 import { getEconomy, getSiteConfig } from '../config';
@@ -71,6 +72,11 @@ export async function getFaucetState(uid: string): Promise<FaucetState> {
       })();
   const claimsToday = await countToday(uid, 'faucet');
 
+  /* The EXP band comes from LIFETIME claims, so it does not reset at midnight
+     with the daily counter — commitment should not be undone by a date change. */
+  const lifetimeClaims = await faucetLifetimeClaims(uid, cooldown.claims);
+  const band = faucetExpRange(lifetimeClaims, cfg);
+
   const remaining = cooldown.nextAt ? Math.max(0, Math.ceil((Date.parse(cooldown.nextAt) - Date.now()) / 1000)) : 0;
   const hh = happyHourNow(cfg.happyHourStartHoursUtc, cfg.happyHourLengthMinutes, cfg.happyHourBonusPct);
 
@@ -78,7 +84,9 @@ export async function getFaucetState(uid: string): Promise<FaucetState> {
     rewardTokens: hh.active
       ? Math.floor(cfg.reward * (1 + cfg.happyHourBonusPct / 100))
       : cfg.reward,
-    exp: cfg.exp,
+    exp: band.min,
+    expMin: band.min,
+    expMax: band.max,
     cooldownSeconds: cfg.cooldownSeconds,
     nextClaimAt: remaining > 0 ? cooldown.nextAt : null,
     secondsRemaining: remaining,
@@ -89,6 +97,24 @@ export async function getFaucetState(uid: string): Promise<FaucetState> {
     happyHourAt: hh.nextAt,
     captchaRequired: cfg.requireCaptcha,
   };
+}
+
+/** Lifetime faucet claims, used to pick the EXP band. Falls back to the
+    cooldown row's running counter when the profile has no counter yet. */
+async function faucetLifetimeClaims(uid: string, cooldownClaims: number): Promise<number> {
+  try {
+    if (isSupabaseBackend) {
+      const { supabaseGetUser } = await import('../data-supabase');
+      const row = await supabaseGetUser(uid);
+      const counts = (row?.claim_counts ?? {}) as Record<string, unknown>;
+      return int(counts.faucet, cooldownClaims);
+    }
+    const snap = await db().doc(`users/${uid}`).get();
+    const counts = (snap.get('claimCounts') ?? {}) as Record<string, unknown>;
+    return int(counts.faucet, cooldownClaims);
+  } catch {
+    return cooldownClaims;
+  }
 }
 
 export interface FaucetClaimResult extends CreditResult {
@@ -143,11 +169,17 @@ export async function claimFaucet(args: {
      timer can never disagree. */
   const window = Math.floor(Date.now() / (cfg.cooldownSeconds * 1000));
 
+  /* EXP is rolled inside the user's band. Rolled ONCE here, before the credit,
+     so a replay of the same window returns the originally-awarded EXP rather
+     than re-rolling a different number for the same claim. */
+  const lifetimeClaims = await faucetLifetimeClaims(args.uid, cooldown.claims);
+  const exp = rollFaucetExp(lifetimeClaims, cfg);
+
   const result = await credit({
     uid: args.uid,
     source: 'faucet',
     amount: base,
-    exp: cfg.exp,
+    exp,
     label: hh.active ? 'Faucet claim (happy hour)' : 'Faucet claim',
     refId: `w${window}`,
     idempotencyKey: `faucet_${window}`,

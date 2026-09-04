@@ -44,6 +44,15 @@ export interface FaucetClaimProps {
   compact?: boolean;
 }
 
+/** "12" for a flat award, "10–20" when the claim rolls inside a band. The
+    range is shown rather than a single number so the credited EXP never looks
+    like it contradicts the label. */
+function expLabel(state: FaucetState): string {
+  const min = state.expMin ?? state.exp;
+  const max = state.expMax ?? state.exp;
+  return max > min ? `${min}–${max}` : String(min);
+}
+
 export function FaucetClaim({ initialState, compact = false }: FaucetClaimProps) {
   const [state, setState] = React.useState(initialState);
   const [remaining, setRemaining] = React.useState(initialState.secondsRemaining);
@@ -151,7 +160,7 @@ export function FaucetClaim({ initialState, compact = false }: FaucetClaimProps)
             {nf(state.rewardTokens)} <span className="text-12 text-text-3">tokens</span>
           </div>
           <div className="text-12 text-text-3">
-            +{state.exp} exp · every {Math.round(state.cooldownSeconds / 60)} min
+            +{expLabel(state)} exp · every {Math.round(state.cooldownSeconds / 60)} min
           </div>
           <div className="text-11 text-text-3">
             {nf(state.claimsToday)} of {nf(state.dailyCap)} claims used today

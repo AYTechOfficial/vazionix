@@ -54,7 +54,7 @@ export default async function FaucetPage() {
           value={nf(state.rewardTokens)}
           unit="tokens"
           icon={Droplet}
-          sub={`+${state.exp} exp · +${(profile?.earningBonus ?? 0).toFixed(1)}% bonus applied`}
+          sub={`+${state.expMax > state.expMin ? `${state.expMin}–${state.expMax}` : state.expMin} exp · +${(profile?.earningBonus ?? 0).toFixed(1)}% bonus applied`}
         />
         <StatCard
           label="Cooldown"

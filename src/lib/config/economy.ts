@@ -17,10 +17,23 @@
 
 import type { CoinTicker, PayoutRailName, ReferralTierName } from '@/lib/models';
 
+/** One rung of the faucet EXP ladder. A claim rolls a random EXP inside
+    [min, max] using the highest rung whose `atClaims` the user has reached, so
+    EXP grows with commitment instead of being the same number forever. */
+export interface FaucetExpTier {
+  /** Lifetime faucet claims at which this rung starts applying. */
+  atClaims: number;
+  min: number;
+  max: number;
+}
+
 export interface FaucetConfig {
   /** Integer tokens per claim, before bonuses. */
   reward: number;
+  /** Fallback EXP when no tier matches. Kept so a partial config still works. */
   exp: number;
+  /** EXP ladder, lowest `atClaims` first. Overrides `exp` when present. */
+  expTiers: FaucetExpTier[];
   cooldownSeconds: number;
   /** Max claims per UTC day. */
   dailyCap: number;
@@ -133,8 +146,18 @@ export const DEFAULT_ECONOMY: EconomyConfig = {
   faucet: {
     reward: 65,
     exp: 3,
-    cooldownSeconds: 34 * 60,
-    dailyCap: 1000,
+    /* EXP rises with lifetime faucet claims and is rolled inside the rung, so
+       two claims rarely award the same amount. Rungs are chosen so a casual
+       user still levels, and a committed one levels noticeably faster. */
+    expTiers: [
+      { atClaims: 0, min: 1, max: 5 },
+      { atClaims: 10, min: 10, max: 20 },
+      { atClaims: 50, min: 50, max: 100 },
+    ],
+    cooldownSeconds: 5 * 60,
+    /* 5-minute spacing allows ~288 claims/day, so the cap — not the cooldown —
+       is the real limiter. 100 x 65 = 6,500 tokens/day per account. */
+    dailyCap: 100,
     happyHourBonusPct: 10,
     happyHourStartHoursUtc: [0, 6, 12, 18],
     happyHourLengthMinutes: 60,
@@ -238,6 +261,33 @@ export function earningBonusBps(level: number, streakDays: number, cfg: LevelCon
 /** Apply a basis-point bonus to an integer token amount, rounding down. */
 export function withBonus(amount: number, bonusBps: number): number {
   return Math.floor(amount * (1 + bonusBps / 10_000));
+}
+
+/* ---- FAUCET EXP LADDER ----------------------------------------------------
+   The EXP band a user is in, from their lifetime faucet claim count. Returned
+   as a range so the UI can show "+10–20 exp" instead of a single number that
+   the credit then contradicts. */
+export function faucetExpRange(
+  claimCount: number,
+  cfg: FaucetConfig,
+): { min: number; max: number } {
+  const tiers = Array.isArray(cfg.expTiers) ? cfg.expTiers : [];
+  if (!tiers.length) return { min: cfg.exp, max: cfg.exp };
+
+  const sorted = [...tiers].sort((a, b) => a.atClaims - b.atClaims);
+  let current = sorted[0]!;
+  for (const tier of sorted) if (claimCount >= tier.atClaims) current = tier;
+
+  const min = Math.max(0, Math.floor(current.min));
+  const max = Math.max(min, Math.floor(current.max));
+  return { min, max };
+}
+
+/** Roll the EXP actually awarded for one claim. Inclusive of both bounds. */
+export function rollFaucetExp(claimCount: number, cfg: FaucetConfig): number {
+  const { min, max } = faucetExpRange(claimCount, cfg);
+  if (max <= min) return min;
+  return min + Math.floor(Math.random() * (max - min + 1));
 }
 
 export function tierForCount(qualified: number, cfg: ReferralConfig): {
