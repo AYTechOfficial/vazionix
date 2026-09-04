@@ -203,6 +203,39 @@ export async function supabaseListAddresses(uid: string) {
   return data ?? [];
 }
 
+/** A user's withdrawal with a given client_request_id (submit replay lookup). */
+export async function supabaseGetWithdrawalByRequestId(uid: string, clientRequestId: string) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('withdrawals')
+    .select('*')
+    .eq('user_id', uid)
+    .eq('client_request_id', clientRequestId)
+    .limit(1);
+  if (error) throw error;
+  return (data ?? [])[0] ?? null;
+}
+
+/** Count of a user's withdrawals created today (daily withdraw cap). */
+export async function supabaseCountWithdrawalsToday(uid: string, dayStartIso: string, dayEndIso: string): Promise<number> {
+  const supabase = bc();
+  const { count, error } = await supabase
+    .from('withdrawals')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', uid)
+    .gte('created_at', dayStartIso)
+    .lt('created_at', dayEndIso);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+/** Insert a withdrawal row. */
+export async function supabaseInsertWithdrawal(row: Record<string, unknown>): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase.from('withdrawals').insert(row);
+  if (error) throw error;
+}
+
 /** Mark a user's unread notifications as read. */
 export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
   const supabase = bc();

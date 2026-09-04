@@ -13,6 +13,8 @@ import type {
 } from '@/lib/models';
 
 import { assertCaptcha } from './captcha';
+import type { EconomyConfig, WithdrawConfig } from '@/lib/config/economy';
+import type { RatesConfig } from './config';
 import { getEconomy, getPayoutRails, getRates, getSiteConfig } from './config';
 import { isSupabaseBackend } from '@/lib/backend';
 import {
@@ -197,6 +199,16 @@ export async function requestWithdrawal(input: WithdrawRequestInput): Promise<Wi
   }
 
   /* Replay: return the withdrawal this submission already created. */
+  if (isSupabaseBackend) {
+    const { supabaseGetWithdrawalByRequestId, supabaseGetUser } = await import('./data-supabase');
+    const priorRow = await supabaseGetWithdrawalByRequestId(input.uid, input.clientRequestId);
+    if (priorRow) return recordFrom(String(priorRow.id), rowToWithdrawalDoc(priorRow));
+    const userRow = await supabaseGetUser(input.uid);
+    if (!userRow) throw new AppError('Account not found.', 404, 'not_found');
+    const user = userRow as Record<string, unknown>;
+    return finishRequestWithdrawal(input, user, cfg, rates);
+  }
+
   const prior = await db()
     .collection('withdrawals')
     .where('uid', '==', input.uid)
@@ -210,6 +222,16 @@ export async function requestWithdrawal(input: WithdrawRequestInput): Promise<Wi
   if (!userSnap.exists) throw new AppError('Account not found.', 404, 'not_found');
   const user = userSnap.data() as Record<string, unknown>;
 
+  return finishRequestWithdrawal(input, user, cfg, rates);
+}
+
+/** Shared tail of requestWithdrawal for a resolved user row (Firestore or Supabase). */
+async function finishRequestWithdrawal(
+  input: WithdrawRequestInput,
+  user: Record<string, unknown>,
+  cfg: WithdrawConfig,
+  rates: RatesConfig,
+): Promise<WithdrawalRecord> {
   if (bool(user.suspended)) {
     throw new AppError(
       str(user.suspendedReason) || 'This account is suspended and cannot withdraw.',
@@ -241,13 +263,22 @@ export async function requestWithdrawal(input: WithdrawRequestInput): Promise<Wi
 
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
-  const todayCount = await db()
-    .collection('withdrawals')
-    .where('uid', '==', input.uid)
-    .where('createdAt', '>=', todayStart)
-    .count()
-    .get();
-  if (int(todayCount.data().count) >= cfg.dailyCount) {
+  const todayEnd = new Date(todayStart);
+  todayEnd.setUTCDate(todayEnd.getUTCDate() + 1);
+  let todayCount = 0;
+  if (isSupabaseBackend) {
+    const { supabaseCountWithdrawalsToday } = await import('./data-supabase');
+    todayCount = await supabaseCountWithdrawalsToday(input.uid, todayStart.toISOString(), todayEnd.toISOString());
+  } else {
+    const snap = await db()
+      .collection('withdrawals')
+      .where('uid', '==', input.uid)
+      .where('createdAt', '>=', todayStart)
+      .count()
+      .get();
+    todayCount = int(snap.data().count);
+  }
+  if (todayCount >= cfg.dailyCount) {
     throw conflict(`Daily withdrawal limit reached (${cfg.dailyCount}). Resets at 00:00 UTC.`, 'daily_cap');
   }
 
@@ -312,7 +343,36 @@ export async function requestWithdrawal(input: WithdrawRequestInput): Promise<Wi
   };
 
   try {
-    await db().doc(`withdrawals/${withdrawalId}`).create(doc);
+    if (isSupabaseBackend) {
+      const { supabaseInsertWithdrawal } = await import('./data-supabase');
+      await supabaseInsertWithdrawal({
+        id: withdrawalId,
+        user_id: input.uid,
+        username: str(user.username, 'member'),
+        country_code: str(user.countryCode, 'XX'),
+        email: str(user.email),
+        coin: input.coin,
+        rail: input.rail,
+        network: quote.network,
+        address,
+        amount: quote.amount,
+        fee: quote.fee,
+        receive_amount: quote.receiveAmount,
+        token_cost: quote.tokenCost,
+        quoted_usd_per_unit: String(rates.spot[input.coin] ?? 0),
+        status,
+        txid: null,
+        batch_id: null,
+        processed_at: null,
+        failure_reason: null,
+        reviewed_by: null,
+        client_request_id: input.clientRequestId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    } else {
+      await db().doc(`withdrawals/${withdrawalId}`).create(doc);
+    }
   } catch (error) {
     await refundLocked(input.uid, quote.tokenCost, withdrawalId, 'Queue failed');
     throw error;
@@ -347,6 +407,11 @@ export async function refundLocked(
   withdrawalId: string,
   reason: string,
 ): Promise<void> {
+  if (isSupabaseBackend) {
+    const { rpcRefund } = await import('./supabase');
+    await rpcRefund({ userUuid: uid, tokens, refId: withdrawalId, reason });
+    return;
+  }
   await db().runTransaction(async (tx) => {
     const ref = db().doc(`users/${uid}`);
     const snap = await tx.get(ref);
@@ -392,6 +457,25 @@ function recordFrom(id: string, data: Record<string, unknown>): WithdrawalRecord
     at: isoOr(data.createdAt),
     processedAt: iso(data.processedAt),
     failureReason: data.failureReason ? str(data.failureReason) : null,
+  };
+}
+
+/** Map a Supabase `withdrawals` row to the camelCase doc `recordFrom` expects. */
+function rowToWithdrawalDoc(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    coin: row.coin,
+    rail: row.rail,
+    network: row.network,
+    address: row.address,
+    amount: row.amount,
+    fee: row.fee,
+    receiveAmount: row.receive_amount,
+    tokenCost: row.token_cost,
+    status: row.status,
+    txid: row.txid,
+    createdAt: row.created_at,
+    processedAt: row.processed_at,
+    failureReason: row.failure_reason,
   };
 }
 

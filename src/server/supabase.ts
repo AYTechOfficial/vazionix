@@ -123,3 +123,30 @@ export async function rpcDebit(input: {
   }
   return data as DebitRpcResult;
 }
+
+export interface RefundRpcResult {
+  ok: boolean;
+  error?: string;
+  message?: string;
+  balance?: number;
+  claimId?: string;
+}
+
+export async function rpcRefund(input: {
+  userUuid: string;
+  tokens: number;
+  refId: string;
+  reason?: string;
+}): Promise<RefundRpcResult> {
+  const supabase = getServerSupabase();
+  const { data, error } = await supabase.rpc('refund', {
+    p_uid: input.userUuid,
+    p_tokens: input.tokens,
+    p_ref_id: input.refId,
+    p_reason: input.reason ?? '',
+  });
+  if (error) {
+    return { ok: false, error: error.message, message: error.message };
+  }
+  return data as RefundRpcResult;
+}
