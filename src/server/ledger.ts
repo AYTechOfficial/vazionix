@@ -543,6 +543,10 @@ export async function listLedger(
 
 /** Count of a user's claims for a source on the current UTC day — the cap check. */
 export async function countToday(uid: string, source: ClaimSource): Promise<number> {
+  if (isSupabaseBackend) {
+    const { supabaseCountClaims } = await import('./data-supabase');
+    return supabaseCountClaims(uid, source, dayKey());
+  }
   const snap = await db()
     .collection(`users/${uid}/claims`)
     .where('source', '==', source)

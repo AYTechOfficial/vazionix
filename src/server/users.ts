@@ -12,6 +12,8 @@ import {
 import type { AppNotification, CoinTicker, UserProfile } from '@/lib/models';
 
 import { getEconomy, getRates } from './config';
+import { supabaseGetConfig, supabaseGetUser } from './data-supabase';
+import { isSupabaseBackend } from '@/lib/backend';
 import {
   AppError,
   FieldValue,
@@ -283,11 +285,41 @@ function profileFrom(
 
 /** The signed-in user's profile, memoised per request. */
 export const getProfile = cache(async (uid: string, emailVerified = true): Promise<UserProfile | null> => {
-  const [snap, economy, rates] = await Promise.all([
-    db().doc(`users/${uid}`).get(),
-    getEconomy(),
-    getRates(),
-  ]);
+  const economy = await getEconomy();
+  const rates = await getRates();
+
+  /* Supabase backend: read the user row and map snake_case -> the Firestore
+     shape profileFrom() expects, so the read model is identical. */
+  if (isSupabaseBackend) {
+    const row = await supabaseGetUser(uid);
+    if (!row) return null;
+    const data: Record<string, unknown> = {
+      ...row,
+      totalExp: row.total_exp,
+      streakDays: row.streak_days,
+      earningBonusBps: row.earning_bonus_bps,
+      referralQualified: row.referral_qualified,
+      claimCounts: row.claim_counts,
+      totalEarned: row.total_earned,
+      referralCode: row.referral_code,
+      username: row.username,
+      email: row.email,
+      avatarInitials: row.avatar_initials,
+      countryCode: row.country_code,
+      balance: row.balance,
+      lockedBalance: row.locked_balance,
+      depositBalance: row.deposit_balance,
+      displayCurrency: row.display_currency,
+      suspended: row.suspended,
+      roles: row.roles,
+      referralTier: row.referral_tier,
+      commissionBps: row.commission_bps,
+      createdAt: row.created_at,
+    };
+    return profileFrom(uid, data, economy, rates.usdPerToken, emailVerified);
+  }
+
+  const snap = await db().doc(`users/${uid}`).get();
   if (!snap.exists) return null;
   return profileFrom(uid, snap.data() as Record<string, unknown>, economy, rates.usdPerToken, emailVerified);
 });

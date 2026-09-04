@@ -14,6 +14,8 @@ import { DEFAULT_AD_BEHAVIOUR, type AdBehaviourConfig, type AdUnitConfig } from 
 import type { PlacementId } from '@/lib/ads/placements';
 
 import { db, iso, isServerFirebaseReady } from './db';
+import { isSupabaseBackend } from '@/lib/backend';
+import { supabaseGetConfig, supabaseGetAdUnits } from './data-supabase';
 
 /* ============================================================================
    CONFIGURATION READS
@@ -57,6 +59,17 @@ function merge<T>(base: T, patch: unknown): T {
 }
 
 async function readDoc(path: string): Promise<Record<string, unknown> | null> {
+  /* Supabase: config documents live in the `config` table, keyed by the path
+     (e.g. 'economy'). Fetch the JSON value directly. */
+  if (isSupabaseBackend) {
+    try {
+      return await supabaseGetConfig(path);
+    } catch (error) {
+      console.error(`[config] supabase read failed for ${path}`, error);
+      return null;
+    }
+  }
+
   if (!isServerFirebaseReady()) return null;
   try {
     const snap = await db().doc(path).get();
@@ -133,7 +146,27 @@ export const getAdConfig = cache(async (): Promise<AdRuntimeConfig> => {
   const behaviour: AdBehaviourConfig = merge(DEFAULT_AD_BEHAVIOUR, behaviourDoc);
 
   const units: Record<string, AdUnitConfig> = {};
-  if (isServerFirebaseReady()) {
+
+  if (isSupabaseBackend) {
+    try {
+      const rows = await supabaseGetAdUnits();
+      for (const row of rows) {
+        const placement = String(row.placement_id ?? '');
+        if (!placement) continue;
+        units[placement] = {
+          placement: placement as PlacementId,
+          kind: (row.kind as AdUnitConfig['kind']) ?? 'html',
+          enabled: row.enabled !== false,
+          ...(row.html ? { html: String(row.html) } : {}),
+          ...(row.src ? { src: String(row.src) } : {}),
+          ...(row.network ? { network: String(row.network) } : {}),
+          ...(row.cap_per_session ? { capPerSession: Number(row.cap_per_session) } : {}),
+        };
+      }
+    } catch (error) {
+      console.error('[config] supabase adUnits read failed', error);
+    }
+  } else if (isServerFirebaseReady()) {
     try {
       const snap = await db().collection('adUnits').get();
       for (const doc of snap.docs) {

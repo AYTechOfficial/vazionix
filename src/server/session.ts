@@ -3,6 +3,8 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { cache } from 'react';
 
+import { isSupabaseBackend } from '@/lib/backend';
+import { getSsrSupabase } from '@/lib/supabase/server';
 import { getAdminAuth } from '@/lib/firebase/admin';
 import { cookies as cookieNames } from '@/lib/brand';
 import type { Viewer } from '@/lib/models';
@@ -141,6 +143,25 @@ export async function destroySession(): Promise<void> {
  * and three components all reading the session cost one verification.
  */
 export const getSessionClaims = cache(async (): Promise<SessionClaims | null> => {
+  /* Supabase backend: read the httpOnly session cookie via the SSR client. */
+  if (isSupabaseBackend) {
+    try {
+      const supabase = await getSsrSupabase();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return null;
+      return claimsFrom({
+        uid: user.id,
+        email: user.email ?? null,
+        email_verified: user.email_confirmed_at ? true : false,
+        name: user.user_metadata?.username ?? null,
+      });
+    } catch {
+      return null;
+    }
+  }
+
   if (!isServerFirebaseReady()) return null;
 
   const store = await cookies();

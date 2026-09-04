@@ -1,11 +1,13 @@
 /* ============================================================================
-   APPLY SUPABASE MIGRATION
+   APPLY SUPABASE MIGRATION (idempotent)
    ----------------------------------------------------------------------------
-   Runs supabase/migrations/*.sql against the Supabase Postgres instance using
-   the direct connection details from .env.local. The password is read from env
-   (never typed inline) because it contains a shell-sensitive `^`.
+   Runs supabase/migrations/*.sql against Supabase Postgres, in order, but only
+   applies each file ONCE, tracking applied migrations in a `schema_migrations`
+   table. Re-running is therefore safe: already-applied files are skipped, so
+   `create policy` / `drop trigger / create trigger` statements never collide.
 
    Usage:  node --env-file=.env.local scripts/apply-supabase-migration.mjs
+   Reset:  (rare) delete rows from schema_migrations to force a re-apply.
    ========================================================================== */
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -40,6 +42,13 @@ async function main() {
   await client.connect();
   console.log('[migrate] connected');
 
+  await client.query(`
+    create table if not exists public.schema_migrations (
+      name text primary key,
+      applied_at timestamptz not null default now()
+    )
+  `);
+
   const dir = resolve(process.cwd(), 'supabase', 'migrations');
   const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
   if (files.length === 0) {
@@ -49,10 +58,30 @@ async function main() {
   }
 
   for (const file of files) {
+    // Skip already-applied.
+    const done = await client.query(
+      'select 1 from public.schema_migrations where name = $1',
+      [file],
+    );
+    if (done.rowCount && done.rowCount > 0) {
+      console.log(`[migrate] skip ${file} (already applied)`);
+      continue;
+    }
+
     const sql = readFileSync(join(dir, file), 'utf8');
     console.log(`[migrate] applying ${file}...`);
-    await client.query(sql);
-    console.log(`[migrate] applied ${file}`);
+    // Apply the migration and record it atomically (a failure rolls both back).
+    await client.query('begin');
+    try {
+      await client.query(sql);
+      await client.query('insert into public.schema_migrations (name) values ($1)', [file]);
+      await client.query('commit');
+      console.log(`[migrate] applied ${file}`);
+    } catch (e) {
+      await client.query('rollback');
+      console.error(`[migrate] failed ${file}`);
+      throw e;
+    }
   }
 
   await client.end();

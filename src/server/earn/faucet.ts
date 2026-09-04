@@ -5,6 +5,8 @@ import type { FaucetState } from '@/lib/models';
 import { assertCaptcha } from '../captcha';
 import { getEconomy, getSiteConfig } from '../config';
 import { AppError, db, int, iso, now, tooMany } from '../db';
+import { isSupabaseBackend } from '@/lib/backend';
+import { supabaseGetCooldown, supabaseSetCooldown } from '../data-supabase';
 import { countToday, credit, type CreditResult } from '../ledger';
 
 /* ============================================================================
@@ -61,14 +63,15 @@ export async function getFaucetState(uid: string): Promise<FaucetState> {
   const economy = await getEconomy();
   const cfg = economy.faucet;
 
-  const [snap, claimsToday] = await Promise.all([
-    COOLDOWN_DOC(uid).get(),
-    countToday(uid, 'faucet'),
-  ]);
+  const cooldown = isSupabaseBackend
+    ? await supabaseGetCooldown(uid, 'faucet')
+    : await (async () => {
+        const snap = await COOLDOWN_DOC(uid).get();
+        return { nextAt: snap.exists ? iso(snap.get('nextAt')) : null, claims: int(snap.get('claims')) };
+      })();
+  const claimsToday = await countToday(uid, 'faucet');
 
-  const nextAtIso = snap.exists ? iso(snap.get('nextAt')) : null;
-  const nextMs = nextAtIso ? Date.parse(nextAtIso) : 0;
-  const remaining = Math.max(0, Math.ceil((nextMs - Date.now()) / 1000));
+  const remaining = cooldown.nextAt ? Math.max(0, Math.ceil((Date.parse(cooldown.nextAt) - Date.now()) / 1000)) : 0;
   const hh = happyHourNow(cfg.happyHourStartHoursUtc, cfg.happyHourLengthMinutes, cfg.happyHourBonusPct);
 
   return {
@@ -77,7 +80,7 @@ export async function getFaucetState(uid: string): Promise<FaucetState> {
       : cfg.reward,
     exp: cfg.exp,
     cooldownSeconds: cfg.cooldownSeconds,
-    nextClaimAt: remaining > 0 ? nextAtIso : null,
+    nextClaimAt: remaining > 0 ? cooldown.nextAt : null,
     secondsRemaining: remaining,
     claimsToday,
     dailyCap: cfg.dailyCap,
@@ -107,10 +110,13 @@ export async function claimFaucet(args: {
 
   if (cfg.requireCaptcha) await assertCaptcha(args.captchaToken, 'faucet', args.ip);
 
-  const cooldownRef = COOLDOWN_DOC(args.uid);
-  const snap = await cooldownRef.get();
-  const nextAtIso = snap.exists ? iso(snap.get('nextAt')) : null;
-  const nextMs = nextAtIso ? Date.parse(nextAtIso) : 0;
+  const cooldown = isSupabaseBackend
+    ? await supabaseGetCooldown(args.uid, 'faucet')
+    : await (async () => {
+        const snap = await COOLDOWN_DOC(args.uid).get();
+        return { nextAt: snap.exists ? iso(snap.get('nextAt')) : null, claims: int(snap.get('claims')) };
+      })();
+  const nextMs = cooldown.nextAt ? Date.parse(cooldown.nextAt) : 0;
 
   if (nextMs > Date.now()) {
     const seconds = Math.ceil((nextMs - Date.now()) / 1000);
@@ -149,10 +155,18 @@ export async function claimFaucet(args: {
   });
 
   const nextAt = new Date(Date.now() + cfg.cooldownSeconds * 1000);
-  await cooldownRef.set(
-    { nextAt, lastClaimAt: now(), claims: int(snap.get('claims')) + 1, updatedAt: now() },
-    { merge: true },
-  );
+  if (isSupabaseBackend) {
+    await supabaseSetCooldown(args.uid, 'faucet', {
+      nextAt,
+      lastClaimAt: new Date(),
+      claims: cooldown.claims + 1,
+    });
+  } else {
+    await COOLDOWN_DOC(args.uid).set(
+      { nextAt, lastClaimAt: now(), claims: cooldown.claims + 1, updatedAt: now() },
+      { merge: true },
+    );
+  }
 
   return { ...result, nextClaimAt: nextAt.toISOString(), happyHour: hh.active };
 }
