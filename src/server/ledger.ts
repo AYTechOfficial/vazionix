@@ -2,8 +2,10 @@ import 'server-only';
 
 import { earningBonusBps, levelFromExp, withBonus } from '@/lib/config/economy';
 import type { ClaimSource, LedgerEntry } from '@/lib/models';
+import { isSupabaseBackend } from '@/lib/backend';
 
 import { getEconomy } from './config';
+import { rpcCredit, rpcDebit } from './supabase';
 import {
   AppError,
   FieldValue,
@@ -104,6 +106,76 @@ const COUNTER_FOR: Partial<Record<ClaimSource, string>> = {
 
 export async function credit(input: CreditInput): Promise<CreditResult> {
   const economy = await getEconomy();
+
+  /* Supabase backend: the DB-enforced Postgres function is authoritative. It
+     performs the whole credit atomically and is replay-safe. */
+  if (isSupabaseBackend) {
+    // Need the resolved user's uuid for the rpc uid param; resolve from uid string.
+    const res = await rpcCredit({
+      userUuid: input.uid,
+      source: input.source,
+      amount: input.amount,
+      exp: input.exp,
+      refId: input.refId,
+      label: input.label,
+      idempotencyKey: input.idempotencyKey,
+      applyBonus: input.applyBonus,
+      score: input.score,
+      ip: input.ip,
+      meta: input.meta,
+    });
+    if (!res.ok) {
+      switch (res.error) {
+        case 'zero_amount': throw new AppError('Nothing to credit.', 400, 'zero_amount');
+        case 'not_found': throw new AppError('Account not found.', 404, 'not_found');
+        case 'suspended': throw new AppError(res.message ?? 'This account is suspended.', 403, 'suspended');
+        default: throw new AppError(res.message ?? 'Could not credit.', 500, 'credit_failed');
+      }
+    }
+
+    const result: CreditResult = {
+      credited: res.credited ?? 0,
+      bonusBps: res.bonusBps ?? 0,
+      exp: res.exp ?? 0,
+      balance: res.balance ?? 0,
+      level: res.level ?? 1,
+      levelUp: res.levelUp ?? false,
+      claimId: res.claimId ?? String(res.balance ?? 0),
+      replayed: res.replayed ?? false,
+    };
+
+    /* Post-commit work the Postgres function does not do: endpoint stats, the
+       referrer commission (a second rpc credit), and the level-up toast. */
+    if (!result.replayed) {
+      void bumpStat({ claims: 1, tokensCredited: result.credited });
+      if (res.referrerUid && res.commission) {
+        try {
+          await credit({
+            uid: res.referrerUid,
+            source: 'referral',
+            amount: res.commission,
+            label: 'Referral commission',
+            refId: res.refRefId ?? null,
+            idempotencyKey: `ref_${res.refRefId ?? res.claimId}`,
+            applyBonus: false,
+          });
+        } catch (e) {
+          console.error('[ledger] referral commission failed', e);
+        }
+      }
+      if (result.levelUp) {
+        await pushNotification(input.uid, {
+          icon: 'checkCircle',
+          tone: 'success',
+          title: `Level ${result.level} reached`,
+          body: 'Your earning bonus just went up. It applies to every claim from now on.',
+          href: '/account',
+        });
+      }
+    }
+    return result;
+  }
+
   const base = Math.max(0, Math.floor(input.amount));
   if (!base) throw new AppError('Nothing to credit.', 400, 'zero_amount');
 
@@ -318,6 +390,37 @@ export interface DebitResult {
 export async function debit(input: DebitInput): Promise<DebitResult> {
   const amount = Math.max(0, Math.floor(input.amount));
   if (!amount) throw new AppError('Nothing to debit.', 400, 'zero_amount');
+
+  /* Supabase backend: DB-posted, atomic, replay-safe. */
+  if (isSupabaseBackend) {
+    const res = await rpcDebit({
+      userUuid: input.uid,
+      amount,
+      source: input.source,
+      refId: input.refId,
+      label: input.label,
+      idempotencyKey: input.idempotencyKey,
+      lock: input.lock,
+    });
+    if (!res.ok) {
+      switch (res.error) {
+        case 'zero_amount': throw new AppError('Nothing to debit.', 400, 'zero_amount');
+        case 'not_found': throw new AppError('Account not found.', 404, 'not_found');
+        case 'suspended': throw new AppError(res.message ?? 'This account is suspended.', 403, 'suspended');
+        case 'insufficient_balance': throw conflict(
+          `Not enough tokens. You have ${(res.balance ?? 0).toLocaleString('en-US')} and this needs ${amount.toLocaleString('en-US')}.`,
+          'insufficient_balance',
+        );
+        default: throw new AppError(res.message ?? 'Could not debit.', 500, 'debit_failed');
+      }
+    }
+    return {
+      debited: res.debited ?? amount,
+      balance: res.balance ?? 0,
+      claimId: res.claimId ?? '',
+      replayed: res.replayed ?? false,
+    };
+  }
 
   const userRef = db().doc(`users/${input.uid}`);
   const claimsCol = db().collection(`users/${input.uid}/claims`);
