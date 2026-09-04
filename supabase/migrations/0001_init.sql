@@ -72,8 +72,10 @@ create table public.claims (
   source     text not null check (source in
                ('faucet','ptc','shortlink','offerwall','bonus','challenge',
                 'referral','coupon','lottery','adjustment','withdrawal','refund')),
-  -- ALWAYS positive (debits live in withdrawals).
-  amount     bigint not null check (amount > 0),
+  -- Signed: positive for credits, negative for debits. The invariant
+  -- balance == sum(claims) - sum(withdrawals token costs) + adjustments relies on
+  -- debits being represented here as a negative ledger row.
+  amount     bigint not null check (amount <> 0),
   exp        bigint not null default 0,
   ref_id     text,
   bonus_bps  int not null default 0,
