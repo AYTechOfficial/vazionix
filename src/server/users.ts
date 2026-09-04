@@ -291,7 +291,13 @@ export const getProfile = cache(async (uid: string, emailVerified = true): Promi
   /* Supabase backend: read the user row and map snake_case -> the Firestore
      shape profileFrom() expects, so the read model is identical. */
   if (isSupabaseBackend) {
-    const row = await supabaseGetUser(uid);
+    let row: Record<string, unknown> | null;
+    try {
+      row = await supabaseGetUser(uid);
+    } catch {
+      // Supabase not configured yet -> no profile, treat as signed-out.
+      return null;
+    }
     if (!row) return null;
     const data: Record<string, unknown> = {
       ...row,

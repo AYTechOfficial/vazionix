@@ -106,26 +106,37 @@ async function countOnline(): Promise<number> {
  */
 export const getPlatformStats = cache(async (): Promise<PlatformStats> => {
   if (isSupabaseBackend) {
-    const { supabaseGetStats, supabaseCountOnline } = await import('./data-supabase');
-    const [global, today, online] = await Promise.all([
-      supabaseGetStats('global'),
-      supabaseGetStats(dayKey()),
-      supabaseCountOnline(5),
-    ]);
-    const g = global ?? {};
-    const t = today ?? {};
-    return {
-      members: num(g.members),
-      membersToday: num(t.members_today),
-      claimsAllTime: num(g.claims),
-      claimsToday: num(t.claims),
-      tokensPaidAllTime: num(g.tokens_credited),
-      paidOutUsd: num(g.usd_withdrawn),
-      withdrawalsAllTime: num(g.withdrawals),
-      withdrawalsToday: num(t.withdrawals),
-      onlineNow: online,
-      updatedAt: g.updated_at ? new Date(g.updated_at as string).toISOString() : new Date().toISOString(),
-    };
+    try {
+      const { supabaseGetStats, supabaseCountOnline } = await import('./data-supabase');
+      const [global, today, online] = await Promise.all([
+        supabaseGetStats('global'),
+        supabaseGetStats(dayKey()),
+        supabaseCountOnline(5),
+      ]);
+      const g = global ?? {};
+      const t = today ?? {};
+      return {
+        members: num(g.members),
+        membersToday: num(t.members_today),
+        claimsAllTime: num(g.claims),
+        claimsToday: num(t.claims),
+        tokensPaidAllTime: num(g.tokens_credited),
+        paidOutUsd: num(g.usd_withdrawn),
+        withdrawalsAllTime: num(g.withdrawals),
+        withdrawalsToday: num(t.withdrawals),
+        onlineNow: online,
+        updatedAt: g.updated_at ? new Date(g.updated_at as string).toISOString() : new Date().toISOString(),
+      };
+    } catch (error) {
+      // Unconfigured Supabase (no keys set yet) means no counters; render zeroes
+      // instead of crashing the most-visited page.
+      console.error('[stats] supabase platform stats failed', error);
+      return {
+        members: 0, membersToday: 0, claimsAllTime: 0, claimsToday: 0,
+        tokensPaidAllTime: 0, paidOutUsd: 0, withdrawalsAllTime: 0, withdrawalsToday: 0,
+        onlineNow: 0, updatedAt: new Date().toISOString(),
+      };
+    }
   }
 
   const [global, today, online] = await Promise.all([
