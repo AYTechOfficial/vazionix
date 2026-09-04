@@ -76,7 +76,17 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const session = request.cookies.get(SESSION_COOKIE)?.value;
+  /* Which cookie carries the session depends on the backend. Firebase mints
+     `<slug>-session`; Supabase writes its own chunked `sb-<ref>-auth-token`
+     cookies. Either way this is only a PRESENCE check — middleware runs on the
+     Edge and verifies nothing. */
+  const supabaseBackend = process.env.DATA_BACKEND !== 'firebase';
+  const hasSupabaseSession = request.cookies
+    .getAll()
+    .some((c) => c.name.startsWith('sb-') && c.name.includes('auth-token'));
+  const session = supabaseBackend
+    ? hasSupabaseSession
+    : Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
   if (!session) {
     const url = request.nextUrl.clone();
@@ -89,13 +99,21 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  const roleHint = request.cookies.get(ROLE_HINT_COOKIE)?.value;
-  if (!roleHint || !VALID_ROLE_HINTS.has(roleHint)) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/admin/403';
-    url.search = '';
-    url.searchParams.set('reason', 'not-staff');
-    return NextResponse.redirect(url);
+  /* The role hint exists only on the Firebase path, where it saves a non-staff
+     visitor a rendered shell. On Supabase the role lives in `public.staff`,
+     which the Edge cannot read, so the hint is skipped and the real decision is
+     made by `requirePermission()` against that table. Skipping a cosmetic hint
+     costs one rendered redirect; it grants nothing, because the hint was never a
+     credential. */
+  if (!supabaseBackend) {
+    const roleHint = request.cookies.get(ROLE_HINT_COOKIE)?.value;
+    if (!roleHint || !VALID_ROLE_HINTS.has(roleHint)) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/admin/403';
+      url.search = '';
+      url.searchParams.set('reason', 'not-staff');
+      return NextResponse.redirect(url);
+    }
   }
 
   /* Looks like staff. The page verifies for real. `x-admin-route` is a

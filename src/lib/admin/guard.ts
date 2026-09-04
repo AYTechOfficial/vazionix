@@ -4,6 +4,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { cookies as cookieNames } from '@/lib/brand';
+import { isSupabaseBackend } from '@/lib/backend';
 
 import { readAdminClaims, type AdminClaims, type DecodedTokenLike } from './claims';
 import { canWithGrants, PERM_META, ROLES, type AdminRole, type Permission } from './rbac';
@@ -81,6 +82,49 @@ export interface AdminSession {
  * outcome, not an exception.
  */
 export async function getAdminSession(): Promise<AdminSession | null> {
+  /* ---- SUPABASE BACKEND -------------------------------------------------
+     The verified credential is the Supabase session (httpOnly auth cookies,
+     validated server-side by supabase.auth.getUser()). The ROLE is then read
+     from `public.staff`, a table no client can read or write — RLS denies every
+     role but service_role, which only the server holds. So the role still comes
+     from a trusted store the caller cannot influence, exactly as the custom
+     claim did; only the storage moved. */
+  if (isSupabaseBackend) {
+    const { getSessionClaims } = await import('@/server/session');
+    const session = await getSessionClaims();
+    if (!session) return null;
+
+    const { supabaseGetStaff } = await import('@/server/data-supabase');
+    let staff: Record<string, unknown> | null = null;
+    try {
+      staff = await supabaseGetStaff(session.uid);
+    } catch {
+      return null;
+    }
+    if (!staff) return null; // authenticated, but not staff
+
+    const role = String(staff.role ?? '') as AdminRole;
+    if (!ROLES[role]) return null;
+
+    /* MFA stays mandatory for staff, and is recorded per staff row on this
+       backend. STAFF_REQUIRE_MFA=false is for enrolling the first admin only. */
+    const requireMfa = (process.env.STAFF_REQUIRE_MFA ?? 'true') !== 'false';
+    if (requireMfa && staff.mfa !== true) return null;
+
+    const perms = Array.isArray(staff.perms) ? (staff.perms as Permission[]) : undefined;
+    return {
+      uid: session.uid,
+      email: session.email,
+      name:
+        (typeof staff.name === 'string' && staff.name.trim()) ||
+        session.email?.split('@')[0] ||
+        session.uid,
+      role,
+      claims: { role, ...(perms ? { perms } : {}) } as AdminClaims,
+      perms,
+    };
+  }
+
   const cookieStore = await cookies();
   const cookie = cookieStore.get(SESSION_COOKIE)?.value;
   if (!cookie) return null;

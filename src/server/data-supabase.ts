@@ -262,6 +262,15 @@ export async function supabaseUpdateUserStreak(uid: string, streakDays: number, 
   if (error) throw error;
 }
 
+/** The caller's staff record, or null. Server-only: `public.staff` is denied to
+    every role but service_role, so the role cannot be influenced by a client. */
+export async function supabaseGetStaff(uid: string): Promise<Record<string, unknown> | null> {
+  const supabase = bc();
+  const { data, error } = await supabase.from('staff').select('*').eq('user_id', uid).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
 /** Mark a user's unread notifications as read. */
 export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
   const supabase = bc();
