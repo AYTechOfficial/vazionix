@@ -555,6 +555,86 @@ export async function supabaseCountCouponRedemptions(code: string): Promise<numb
   return count ?? 0;
 }
 
+/* ---- SUPPORT TICKETS ----------------------------------------------------- */
+
+export async function supabaseListUserTickets(uid: string, limit = 50) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('tickets')
+    .select('*')
+    .eq('user_id', uid)
+    .order('last_message_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function supabaseListTicketMessages(ticketIds: string[]) {
+  if (!ticketIds.length) return [];
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('ticket_messages')
+    .select('*')
+    .in('ticket_id', ticketIds)
+    .order('created_at', { ascending: true })
+    .limit(1000);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function supabaseInsertTicket(row: Record<string, unknown>): Promise<string> {
+  const supabase = bc();
+  const { data, error } = await supabase.from('tickets').insert(row).select('id').single();
+  if (error) throw error;
+  return String(data.id);
+}
+
+export async function supabaseInsertTicketMessage(row: Record<string, unknown>): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase.from('ticket_messages').insert(row);
+  if (error) throw error;
+}
+
+export async function supabaseGetTicket(id: string) {
+  const supabase = bc();
+  const { data, error } = await supabase.from('tickets').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+export async function supabaseUpdateTicket(id: string, patch: Record<string, unknown>): Promise<void> {
+  const supabase = bc();
+  await supabase.from('tickets').update(patch).eq('id', id);
+}
+
+/* ---- REFERRALS ----------------------------------------------------------- */
+
+export async function supabaseListReferrals(referrerId: string, limit = 200) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('referrals')
+    .select('*')
+    .eq('referrer_id', referrerId)
+    .order('joined_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/* ---- CAPTCHA TOKENS ------------------------------------------------------ */
+
+/** Record a solved captcha token. Returns false when it was already spent —
+    the primary key is what makes one solve fund exactly one action. */
+export async function supabaseSpendCaptchaToken(token: string, expiresAt: Date): Promise<boolean> {
+  const supabase = bc();
+  const { error } = await supabase
+    .from('captcha_tokens')
+    .insert({ token, expires_at: expiresAt.toISOString() });
+  if (!error) return true;
+  if ((error as { code?: string }).code === '23505') return false;
+  throw error;
+}
+
 /** Mark a user's unread notifications as read. */
 export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
   const supabase = bc();

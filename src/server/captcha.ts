@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { CAPTCHA_PROVIDERS, captchaEnabled, captchaProvider } from '@/lib/captcha/config';
 
 import { AppError, db, isServerFirebaseReady, now } from './db';
+import { isSupabaseBackend } from '@/lib/backend';
 
 /* ============================================================================
    CAPTCHA VERIFICATION (server)
@@ -122,9 +123,34 @@ export async function verifyCaptcha(
     return { ok: false, provider: captchaProvider, reason: providerReason ?? 'Captcha failed.' };
   }
 
-  /* ---- Single-use enforcement -------------------------------------------- */
-  if (isServerFirebaseReady()) {
-    const id = hash(`${action}:${token}`).slice(0, 60);
+  /* ---- Single-use enforcement --------------------------------------------
+     One solve funds exactly one action. The token's hash is the primary key, so
+     a replay loses the insert race instead of being trusted. */
+  const id = hash(`${action}:${token}`).slice(0, 60);
+
+  if (isSupabaseBackend) {
+    try {
+      const { supabaseSpendCaptchaToken } = await import('./data-supabase');
+      const fresh = await supabaseSpendCaptchaToken(id, new Date(Date.now() + TOKEN_TTL_MS));
+      if (!fresh) {
+        return {
+          ok: false,
+          provider: captchaProvider,
+          reason: 'That captcha was already used. Solve a new one.',
+        };
+      }
+    } catch (error) {
+      /* A failure to RECORD the token must not silently accept it: that would
+         turn one solve into unlimited claims, which is the whole attack this
+         guard exists to stop. */
+      console.error('[captcha] single-use record failed', error);
+      return {
+        ok: false,
+        provider: captchaProvider,
+        reason: 'Could not verify that captcha was unused. Try again.',
+      };
+    }
+  } else if (isServerFirebaseReady()) {
     try {
       await db().doc(`captchaTokens/${id}`).create({
         action,

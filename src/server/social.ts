@@ -183,29 +183,65 @@ export async function getReferralSummary(uid: string): Promise<ReferralSummary> 
     perk: t.perk,
   }));
 
-  const userSnap = await db().doc(`users/${uid}`).get();
-  const user = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {};
+  let user: Record<string, unknown> = {};
+  let rows: ReferralRow[] = [];
+  let funnelClicks = 0;
+  let funnelSignups = 0;
+
+  if (isSupabaseBackend) {
+    const { supabaseGetUser, supabaseListReferrals } = await import('./data-supabase');
+    const [userRow, refRows] = await Promise.all([
+      supabaseGetUser(uid),
+      supabaseListReferrals(uid, 200),
+    ]);
+    const u = (userRow ?? {}) as Record<string, unknown>;
+    user = { ...u, referralCode: u.referral_code };
+    rows = refRows.map((d) => {
+      const lastActive = d.last_active_at ? new Date(d.last_active_at as string).toISOString() : null;
+      const joined = d.joined_at ? new Date(d.joined_at as string).toISOString() : new Date().toISOString();
+      return {
+        uid: String(d.referred_user_id ?? ''),
+        username: String(d.username ?? 'member'),
+        countryCode: String(d.country_code ?? 'XX'),
+        earned: Number(d.commission_paid ?? 0),
+        level: Number(d.level ?? 1),
+        joined,
+        lastActive: lastActive ?? joined,
+        status: statusFor(lastActive),
+        qualified: d.qualified === true,
+      };
+    });
+  } else {
+    const userSnap = await db().doc(`users/${uid}`).get();
+    user = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {};
+
+    const listSnap = isServerFirebaseReady()
+      ? await db().collection(`referrals/${uid}/list`).orderBy('joinedAt', 'desc').limit(200).get()
+      : null;
+
+    rows = (listSnap?.docs ?? []).map((doc) => {
+      const data = doc.data();
+      const lastActive = iso(data.lastActiveAt);
+      return {
+        uid: doc.id,
+        username: str(data.username, 'member'),
+        countryCode: str(data.countryCode, 'XX'),
+        earned: int(data.commissionPaid),
+        level: int(data.level, 1),
+        joined: isoOr(data.joinedAt),
+        lastActive: lastActive ?? isoOr(data.joinedAt),
+        status: statusFor(lastActive),
+        qualified: data.qualified === true,
+      };
+    });
+
+    /* Click and signup attribution, written by the `?r=` handler in middleware. */
+    const funnel = await db().doc(`referralStats/${uid}`).get();
+    funnelClicks = int(funnel.get('clicks'));
+    funnelSignups = int(funnel.get('signups'));
+  }
+
   const code = str(user.referralCode);
-
-  const listSnap = isServerFirebaseReady()
-    ? await db().collection(`referrals/${uid}/list`).orderBy('joinedAt', 'desc').limit(200).get()
-    : null;
-
-  const rows: ReferralRow[] = (listSnap?.docs ?? []).map((doc) => {
-    const data = doc.data();
-    const lastActive = iso(data.lastActiveAt);
-    return {
-      uid: doc.id,
-      username: str(data.username, 'member'),
-      countryCode: str(data.countryCode, 'XX'),
-      earned: int(data.commissionPaid),
-      level: int(data.level, 1),
-      joined: isoOr(data.joinedAt),
-      lastActive: lastActive ?? isoOr(data.joinedAt),
-      status: statusFor(lastActive),
-      qualified: data.qualified === true,
-    };
-  });
 
   const qualified = rows.filter((r) => r.qualified).length;
   const { tier, rate, next } = tierForCount(qualified, economy.referrals);
@@ -226,8 +262,6 @@ export async function getReferralSummary(uid: string): Promise<ReferralSummary> 
     }));
 
   /* Click and signup attribution, written by the `?r=` handler in middleware. */
-  const funnel = await db().doc(`referralStats/${uid}`).get();
-
   return {
     code,
     link: referralUrl(code),
@@ -241,8 +275,8 @@ export async function getReferralSummary(uid: string): Promise<ReferralSummary> 
     toNextTier: next ? Math.max(0, next.at - qualified) : 0,
     rows,
     byCountry,
-    clicks: funnel.exists ? int(funnel.get('clicks')) : 0,
-    signups: funnel.exists ? int(funnel.get('signups')) : rows.length,
+    clicks: funnelClicks,
+    signups: funnelSignups || rows.length,
   };
 }
 
