@@ -221,6 +221,11 @@ export async function ensureUser(input: CreateUserInput): Promise<{ created: boo
 /** Touch `lastSeenAt`, used by the online counter and the dormancy sweep. */
 export async function touchUser(uid: string): Promise<void> {
   try {
+    if (isSupabaseBackend) {
+      const { supabaseTouchUser } = await import('./data-supabase');
+      await supabaseTouchUser(uid);
+      return;
+    }
     await db().doc(`users/${uid}`).update({ lastSeenAt: now() });
   } catch {
     // A missing document is repaired by ensureUser on the next session mint.

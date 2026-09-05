@@ -635,6 +635,65 @@ export async function supabaseSpendCaptchaToken(token: string, expiresAt: Date):
   throw error;
 }
 
+/* ---- ADMIN --------------------------------------------------------------- */
+
+/** COUNT(*) with simple equality / IN filters. Mirrors admin.ts#countWhere. */
+export async function supabaseCountWhere(
+  table: string,
+  filters: Array<[string, '==' | 'in', unknown]> = [],
+): Promise<number> {
+  const supabase = bc();
+  let q = supabase.from(table).select('*', { count: 'exact', head: true });
+  for (const [col, op, value] of filters) {
+    q = op === 'in' ? q.in(col, value as unknown[]) : q.eq(col, value as never);
+  }
+  const { count, error } = await q;
+  if (error) throw error;
+  return count ?? 0;
+}
+
+/** Queued withdrawals, for the treasury card and the payout queue. */
+export async function supabaseQueuedWithdrawals(limit = 500) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('withdrawals')
+    .select('*')
+    .in('status', ['Pending', 'HeldForReview', 'Processing'])
+    .order('created_at', { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Withdrawals by status, newest first, for the admin queue tabs. */
+export async function supabaseWithdrawalsByStatus(statuses: string[], limit = 100) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('withdrawals')
+    .select('*')
+    .in('status', statuses)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Users page: newest first, with an optional suspended filter. */
+export async function supabaseListUsers(opts: { limit?: number; suspended?: boolean } = {}) {
+  const supabase = bc();
+  let q = supabase.from('users').select('*').order('created_at', { ascending: false }).limit(opts.limit ?? 50);
+  if (typeof opts.suspended === 'boolean') q = q.eq('suspended', opts.suspended);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Touch last_seen_at. Fire-and-forget: never worth failing a page render. */
+export async function supabaseTouchUser(uid: string): Promise<void> {
+  const supabase = bc();
+  await supabase.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id', uid);
+}
+
 /** Mark a user's unread notifications as read. */
 export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
   const supabase = bc();

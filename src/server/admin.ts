@@ -8,6 +8,7 @@ import type {
 } from '@/lib/models';
 
 import { getRates } from './config';
+import { isSupabaseBackend } from '@/lib/backend';
 import {
   FieldValue,
   bool,
@@ -94,7 +95,48 @@ export async function getAdminOverview(): Promise<AdminOverview> {
 
 type Filter = [string, '==' | '>=' | '<=' | 'in' | '>' | '<', unknown];
 
+/** Firestore collection name -> Supabase table name, where they differ. */
+const SUPABASE_TABLE: Record<string, string> = {
+  ptcAds: 'ptc_ads',
+  offerwallProviders: 'offerwall_providers',
+  offerwallConversions: 'offerwall_conversions',
+  lotteryTickets: 'lottery_tickets',
+  adUnits: 'ad_units',
+  auditLog: 'audit_log',
+};
+
+/** Firestore field name -> Supabase column name, where they differ. */
+const SUPABASE_COLUMN: Record<string, string> = {
+  uid: 'user_id',
+  lastMessageAt: 'last_message_at',
+  createdAt: 'created_at',
+  processedAt: 'processed_at',
+  tokenCost: 'token_cost',
+  countryCode: 'country_code',
+};
+
 export async function countWhere(collection: string, filters: Filter[] = []): Promise<number> {
+  if (isSupabaseBackend) {
+    /* The console's counts use equality and IN only, which map cleanly onto a
+       Postgres count. An unsupported operator returns 0 and LOGS, rather than
+       quietly producing a wrong number on a screen used to make decisions. */
+    try {
+      const { supabaseCountWhere } = await import('./data-supabase');
+      const mapped: Array<[string, '==' | 'in', unknown]> = [];
+      for (const [field, op, value] of filters) {
+        if (op !== '==' && op !== 'in') {
+          console.error(`[admin] countWhere: unsupported operator ${op} on ${collection}.${field}`);
+          return 0;
+        }
+        mapped.push([SUPABASE_COLUMN[field] ?? field, op, value]);
+      }
+      return await supabaseCountWhere(SUPABASE_TABLE[collection] ?? collection, mapped);
+    } catch (error) {
+      console.error(`[admin] supabase count on ${collection} failed`, error);
+      return 0;
+    }
+  }
+
   if (!isServerFirebaseReady()) return 0;
   try {
     let query = db().collection(collection) as unknown as import('firebase-admin/firestore').Query;
@@ -186,10 +228,50 @@ export async function listUsers(options: {
   suspended?: boolean;
   sort?: 'createdAt' | 'balance' | 'totalEarned' | 'level';
 } = {}): Promise<UserPage> {
-  if (!isServerFirebaseReady()) return { rows: [], cursor: null, total: 0 };
-
   const limit = Math.min(100, Math.max(5, options.limit ?? 25));
   const search = options.search?.trim().toLowerCase();
+
+  if (isSupabaseBackend) {
+    const { getServerSupabase } = await import('./supabase');
+    const supabase = getServerSupabase();
+    const sortColumn =
+      options.sort === 'balance' ? 'balance'
+      : options.sort === 'totalEarned' ? 'total_earned'
+      : options.sort === 'level' ? 'level'
+      : 'created_at';
+
+    let q = supabase.from('users').select('*', { count: 'exact' });
+
+    /* Postgres CAN do substring search, so the console's search box actually
+       matches anywhere in the handle or email rather than prefix-only. */
+    if (search) {
+      q = q.or(`username_lower.ilike.%${search}%,email.ilike.%${search}%`);
+    }
+    if (options.suspended !== undefined) q = q.eq('suspended', options.suspended);
+
+    const { data, count, error } = await q.order(sortColumn, { ascending: false }).limit(limit);
+    if (error) {
+      console.error('[admin] supabase user list failed', error);
+      return { rows: [], cursor: null, total: 0 };
+    }
+
+    const rows = (data ?? []).map((r) =>
+      userRow(String(r.id), {
+        ...r,
+        usernameLower: r.username_lower,
+        countryCode: r.country_code,
+        lockedBalance: r.locked_balance,
+        totalEarned: r.total_earned,
+        referralCount: r.referral_qualified,
+        emailVerified: r.email_verified,
+        createdAt: r.created_at,
+        lastSeenAt: r.last_seen_at,
+      } as Record<string, unknown>),
+    );
+    return { rows, cursor: null, total: count ?? rows.length };
+  }
+
+  if (!isServerFirebaseReady()) return { rows: [], cursor: null, total: 0 };
 
   /* A search is a prefix range on `usernameLower`, or an exact email match.
      Firestore has no substring search; anything more than this needs an external
@@ -360,10 +442,55 @@ export async function listWithdrawalQueue(options: {
   limit?: number;
   cursor?: string | null;
 } = {}): Promise<{ rows: AdminWithdrawalRow[]; cursor: string | null; total: number }> {
-  if (!isServerFirebaseReady()) return { rows: [], cursor: null, total: 0 };
-
   const limit = Math.min(100, Math.max(5, options.limit ?? 25));
   const status = options.status ?? 'queue';
+
+  if (isSupabaseBackend) {
+    const { supabaseWithdrawalsByStatus, supabaseCountWhere } = await import('./data-supabase');
+    const statuses =
+      status === 'queue' ? ['Pending', 'HeldForReview', 'Processing']
+      : status === 'all' ? []
+      : [status];
+
+    try {
+      const rows = statuses.length
+        ? await supabaseWithdrawalsByStatus(statuses, limit)
+        : await supabaseWithdrawalsByStatus(
+            ['Pending', 'HeldForReview', 'Processing', 'Completed', 'Rejected', 'Failed', 'Reversed'],
+            limit,
+          );
+
+      const total = statuses.length
+        ? await supabaseCountWhere('withdrawals', [['status', 'in', statuses]])
+        : await supabaseCountWhere('withdrawals');
+
+      return {
+        rows: rows.map((r) =>
+          adminWithdrawalRow(String(r.id), {
+            ...r,
+            uid: r.user_id,
+            countryCode: r.country_code,
+            receiveAmount: r.receive_amount,
+            tokenCost: r.token_cost,
+            createdAt: r.created_at,
+            processedAt: r.processed_at,
+            failureReason: r.failure_reason,
+            reviewedBy: r.reviewed_by,
+            /* No denormalised usdValue on the Postgres row: derive from the quote
+               the user was shown, so the console total matches their receipt. */
+            usdValue: String((Number(r.quoted_usd_per_unit ?? 0) || 0) * (Number(r.amount ?? 0) || 0)),
+          } as Record<string, unknown>),
+        ),
+        cursor: null,
+        total,
+      };
+    } catch (error) {
+      console.error('[admin] supabase withdrawal queue failed', error);
+      return { rows: [], cursor: null, total: 0 };
+    }
+  }
+
+  if (!isServerFirebaseReady()) return { rows: [], cursor: null, total: 0 };
 
   let query = db().collection('withdrawals').orderBy('createdAt', 'desc').limit(limit + 1);
 

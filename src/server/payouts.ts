@@ -3,6 +3,7 @@ import 'server-only';
 import type { CoinTicker, PayoutRailName } from '@/lib/models';
 
 import { getRates } from './config';
+import { isSupabaseBackend } from '@/lib/backend';
 import { AppError, FieldValue, db, int, now, str } from './db';
 import { bumpStat } from './stats';
 import { pushNotification } from './users';
@@ -329,6 +330,22 @@ export async function rejectWithdrawal(
 
 /** USD value of everything currently queued, for the admin treasury card. */
 export async function pendingPayoutTotal(): Promise<{ count: number; usd: number; tokens: number }> {
+  if (isSupabaseBackend) {
+    const { supabaseQueuedWithdrawals } = await import('./data-supabase');
+    const rows = await supabaseQueuedWithdrawals(500);
+    let usd = 0;
+    let tokens = 0;
+    for (const row of rows) {
+      /* The Supabase row keeps the quote rather than a denormalised usdValue, so
+         the total is derived from the price the user was actually shown. */
+      const perUnit = Number(row.quoted_usd_per_unit ?? 0) || 0;
+      const amount = Number(row.amount ?? 0) || 0;
+      usd += perUnit * amount;
+      tokens += Number(row.token_cost ?? 0);
+    }
+    return { count: rows.length, usd, tokens };
+  }
+
   const snap = await db()
     .collection('withdrawals')
     .where('status', 'in', ['Pending', 'HeldForReview', 'Processing'])
