@@ -151,37 +151,59 @@ function challengeKey(id: string, repeat: string): string {
 }
 
 export async function listChallenges(uid: string | null): Promise<ChallengeItem[]> {
-  if (!isServerFirebaseReady()) return [];
+  let rows: Array<{ id: string; data: Record<string, unknown> }> = [];
 
-  const snap = await db()
-    .collection('challenges')
-    .where('enabled', '==', true)
-    .orderBy('tokens', 'desc')
-    .limit(100)
-    .get();
-  if (snap.empty) return [];
+  if (isSupabaseBackend) {
+    const { supabaseListChallenges } = await import('../data-supabase');
+    const list = await supabaseListChallenges();
+    rows = list.map((r) => ({ id: String(r.id), data: r as Record<string, unknown> }));
+  } else {
+    if (!isServerFirebaseReady()) return [];
+    const snap = await db()
+      .collection('challenges')
+      .where('enabled', '==', true)
+      .orderBy('tokens', 'desc')
+      .limit(100)
+      .get();
+    rows = snap.docs.map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> }));
+  }
+  if (!rows.length) return [];
 
   let user: Record<string, unknown> = {};
   let claimedIds = new Set<string>();
 
   if (uid) {
-    const [userSnap, claimsSnap] = await Promise.all([
-      db().doc(`users/${uid}`).get(),
-      db().collection(`users/${uid}/claims`).where('source', '==', 'challenge').limit(300).get(),
-    ]);
-    user = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {};
-    claimedIds = new Set(claimsSnap.docs.map((d) => d.id));
+    if (isSupabaseBackend) {
+      const { supabaseGetUser, supabaseListClaims } = await import('../data-supabase');
+      const [row, claims] = await Promise.all([
+        supabaseGetUser(uid),
+        supabaseListClaims(uid, { limit: 300, source: 'challenge', cursorIso: null }),
+      ]);
+      const r = (row ?? {}) as Record<string, unknown>;
+      user = { ...r, claimCounts: r.claim_counts, referralQualified: r.referral_qualified };
+      /* The idempotency key IS the challenge claim id, so a claimed challenge is
+         one whose key appears in the ledger. */
+      claimedIds = new Set(
+        (claims ?? []).map((c) => String(c.client_request_id ?? '')).filter(Boolean),
+      );
+    } else {
+      const [userSnap, claimsSnap] = await Promise.all([
+        db().doc(`users/${uid}`).get(),
+        db().collection(`users/${uid}/claims`).where('source', '==', 'challenge').limit(300).get(),
+      ]);
+      user = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {};
+      claimedIds = new Set(claimsSnap.docs.map((d) => d.id));
+    }
   }
 
-  return snap.docs.map((doc) => {
-    const data = doc.data() as Record<string, unknown>;
+  return rows.map(({ id, data }) => {
     const kind = (str(data.kind, 'faucet') as ChallengeItem['kind']);
     const of = int(data.target, 1);
     const at = uid ? Math.min(of, PROGRESS_FIELD[kind]?.(user) ?? 0) : 0;
-    const claimed = claimedIds.has(challengeKey(doc.id, str(data.repeat, 'once')));
+    const claimed = claimedIds.has(challengeKey(id, str(data.repeat, 'once')));
 
     return {
-      id: doc.id,
+      id,
       title: str(data.title, 'Challenge'),
       tokens: int(data.tokens),
       exp: int(data.exp),
@@ -203,14 +225,31 @@ export async function claimChallenge(args: {
   const site = await getSiteConfig();
   if (!site.earningOpen) throw new AppError('Earning is paused right now.', 503, 'earning_paused');
 
-  const snap = await db().doc(`challenges/${args.challengeId}`).get();
-  if (!snap.exists) throw new AppError('Challenge not found.', 404, 'not_found');
-  const data = snap.data() as Record<string, unknown>;
-  if (!bool(data.enabled, true)) throw new AppError('That challenge has ended.', 400, 'disabled');
+  let data: Record<string, unknown>;
+  let user: Record<string, unknown>;
 
-  const userSnap = await db().doc(`users/${args.uid}`).get();
-  if (!userSnap.exists) throw new AppError('Account not found.', 404, 'not_found');
-  const user = userSnap.data() as Record<string, unknown>;
+  if (isSupabaseBackend) {
+    const { supabaseGetChallenge, supabaseGetUser } = await import('../data-supabase');
+    const [row, userRow] = await Promise.all([
+      supabaseGetChallenge(args.challengeId),
+      supabaseGetUser(args.uid),
+    ]);
+    if (!row) throw new AppError('Challenge not found.', 404, 'not_found');
+    data = row as Record<string, unknown>;
+    if (!bool(data.enabled, true)) throw new AppError('That challenge has ended.', 400, 'disabled');
+    if (!userRow) throw new AppError('Account not found.', 404, 'not_found');
+    const u = userRow as Record<string, unknown>;
+    user = { ...u, claimCounts: u.claim_counts, referralQualified: u.referral_qualified };
+  } else {
+    const snap = await db().doc(`challenges/${args.challengeId}`).get();
+    if (!snap.exists) throw new AppError('Challenge not found.', 404, 'not_found');
+    data = snap.data() as Record<string, unknown>;
+    if (!bool(data.enabled, true)) throw new AppError('That challenge has ended.', 400, 'disabled');
+
+    const userSnap = await db().doc(`users/${args.uid}`).get();
+    if (!userSnap.exists) throw new AppError('Account not found.', 404, 'not_found');
+    user = userSnap.data() as Record<string, unknown>;
+  }
 
   const kind = (str(data.kind, 'faucet') as ChallengeItem['kind']);
   const target = int(data.target, 1);

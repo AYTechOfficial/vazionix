@@ -482,6 +482,79 @@ export async function supabaseGetConversionById(id: string) {
   return data ?? null;
 }
 
+/* ---- LOTTERY ------------------------------------------------------------- */
+
+export async function supabaseGetLotteryRound(id = 'r1') {
+  const supabase = bc();
+  const { data, error } = await supabase.from('lottery_rounds').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+export async function supabaseUpsertLotteryRound(row: Record<string, unknown>): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase.from('lottery_rounds').upsert(row, { onConflict: 'id' });
+  if (error) throw error;
+}
+
+export async function supabaseListMyTickets(uid: string, limit = 50) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('lottery_tickets')
+    .select('*')
+    .eq('user_id', uid)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function supabaseCountTicketsInRound(uid: string, roundId: string): Promise<number> {
+  const supabase = bc();
+  const { count, error } = await supabase
+    .from('lottery_tickets')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', uid)
+    .eq('round_id', roundId);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+export async function supabaseInsertTickets(rows: Array<Record<string, unknown>>): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase.from('lottery_tickets').insert(rows);
+  if (error) throw error;
+}
+
+/* ---- COUPONS ------------------------------------------------------------- */
+
+export async function supabaseGetCoupon(code: string) {
+  const supabase = bc();
+  const { data, error } = await supabase.from('coupons').select('*').eq('code', code).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+/** Claim a coupon for a user. Returns false when they already redeemed it —
+    the unique (code, user_id) index is what makes that race-safe. */
+export async function supabaseRedeemCoupon(code: string, uid: string): Promise<boolean> {
+  const supabase = bc();
+  const { error } = await supabase.from('coupon_redemptions').insert({ code, user_id: uid });
+  if (!error) return true;
+  if ((error as { code?: string }).code === '23505') return false;
+  throw error;
+}
+
+export async function supabaseCountCouponRedemptions(code: string): Promise<number> {
+  const supabase = bc();
+  const { count, error } = await supabase
+    .from('coupon_redemptions')
+    .select('code', { count: 'exact', head: true })
+    .eq('code', code);
+  if (error) throw error;
+  return count ?? 0;
+}
+
 /** Mark a user's unread notifications as read. */
 export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
   const supabase = bc();

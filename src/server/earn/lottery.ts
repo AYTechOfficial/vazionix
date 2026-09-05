@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import type { LotteryState, LotteryTicket } from '@/lib/models';
 
 import { getEconomy, getSiteConfig } from '../config';
+import { isSupabaseBackend } from '@/lib/backend';
 import {
   AppError,
   FieldValue,
@@ -51,6 +52,32 @@ async function readRound(): Promise<RoundData> {
   const cfg = economy.lottery;
   const drawsAt = nextUtcWeekday(cfg.drawDayUtc, cfg.drawHourUtc).toISOString();
 
+  if (isSupabaseBackend) {
+    const { supabaseGetLotteryRound, supabaseUpsertLotteryRound } = await import('../data-supabase');
+    const row = await supabaseGetLotteryRound('r1');
+    if (!row) {
+      await supabaseUpsertLotteryRound({
+        id: 'r1',
+        pool: cfg.seedPool,
+        prize_pool: cfg.seedPool,
+        ticket_price_tokens: cfg.ticketPriceTokens,
+        winners_per_draw: cfg.winnersPerDraw,
+        total_tickets: 0,
+        draws_at: drawsAt,
+        closed: false,
+        updated_at: new Date().toISOString(),
+      });
+      return { round: 'r1', pool: cfg.seedPool, totalTickets: 0, drawsAt, closed: false };
+    }
+    return {
+      round: String(row.id ?? 'r1'),
+      pool: Number(row.pool ?? row.prize_pool ?? cfg.seedPool),
+      totalTickets: Number(row.total_tickets ?? 0),
+      drawsAt: row.draws_at ? new Date(row.draws_at as string).toISOString() : drawsAt,
+      closed: row.closed === true,
+    };
+  }
+
   if (!isServerFirebaseReady()) {
     return { round: 'r1', pool: cfg.seedPool, totalTickets: 0, drawsAt, closed: false };
   }
@@ -78,7 +105,17 @@ export async function getLotteryState(uid: string | null): Promise<LotteryState>
   const round = await readRound();
 
   let myTickets: LotteryTicket[] = [];
-  if (uid && isServerFirebaseReady()) {
+
+  if (uid && isSupabaseBackend) {
+    const { supabaseListMyTickets } = await import('../data-supabase');
+    const rows = await supabaseListMyTickets(uid, 50);
+    myTickets = rows.map((d) => ({
+      id: String(d.ticket_id ?? d.id ?? ''),
+      status: (String(d.status ?? 'Pending') as LotteryTicket['status']),
+      at: d.created_at ? new Date(d.created_at as string).toISOString() : new Date().toISOString(),
+      prize: Number(d.prize ?? 0),
+    }));
+  } else if (uid && isServerFirebaseReady()) {
     /* Across all rounds, newest first: a user wants to see the ones that lost as
        well as the ones still pending. */
     const snap = await db()
@@ -124,13 +161,19 @@ export async function buyLotteryTickets(args: {
   const round = await readRound();
   if (round.closed) throw new AppError('This round has closed. The next one opens after the draw.', 400, 'round_closed');
 
-  const held = await db()
-    .collection('lotteryTickets')
-    .where('uid', '==', args.uid)
-    .where('round', '==', round.round)
-    .count()
-    .get();
-  const already = int(held.data().count);
+  let already: number;
+  if (isSupabaseBackend) {
+    const { supabaseCountTicketsInRound } = await import('../data-supabase');
+    already = await supabaseCountTicketsInRound(args.uid, round.round);
+  } else {
+    const held = await db()
+      .collection('lotteryTickets')
+      .where('uid', '==', args.uid)
+      .where('round', '==', round.round)
+      .count()
+      .get();
+    already = int(held.data().count);
+  }
   if (already + count > cfg.maxTicketsPerUserPerRound) {
     throw new AppError(
       `You can hold at most ${cfg.maxTicketsPerUserPerRound} tickets per round — you have ${already}.`,
@@ -148,9 +191,37 @@ export async function buyLotteryTickets(args: {
     refId: round.round,
   });
 
-  const batch = db().batch();
-  const tickets: LotteryTicket[] = [];
+  /* The pool grows by the ticket revenue's payout share; the remainder is the
+     house edge that funds the seed of the next round. */
+  const poolAdd = Math.floor((cost * cfg.payoutBps) / 10_000);
   const at = new Date().toISOString();
+  const tickets: LotteryTicket[] = [];
+
+  if (isSupabaseBackend) {
+    const { supabaseInsertTickets, supabaseUpsertLotteryRound } = await import('../data-supabase');
+    const rows: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < count; i++) {
+      const ticketId = randomUUID();
+      rows.push({
+        ticket_id: ticketId,
+        user_id: args.uid,
+        round_id: round.round,
+        status: 'Pending',
+        prize: 0,
+      });
+      tickets.push({ id: ticketId, status: 'Pending', at, prize: 0 });
+    }
+    await supabaseInsertTickets(rows);
+    await supabaseUpsertLotteryRound({
+      id: round.round,
+      pool: round.pool + poolAdd,
+      total_tickets: round.totalTickets + count,
+      updated_at: at,
+    });
+    return { bought: count, balance: result.balance, pool: round.pool + poolAdd, tickets };
+  }
+
+  const batch = db().batch();
 
   for (let i = 0; i < count; i++) {
     const ticketId = randomUUID();
@@ -165,9 +236,6 @@ export async function buyLotteryTickets(args: {
     tickets.push({ id: ticketId, status: 'Pending', at, prize: 0 });
   }
 
-  /* The pool grows by the ticket revenue's payout share; the remainder is the
-     house edge that funds the seed of the next round. */
-  const poolAdd = Math.floor((cost * cfg.payoutBps) / 10_000);
   batch.set(
     db().doc(ROUND),
     {
