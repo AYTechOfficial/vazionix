@@ -1,12 +1,10 @@
 import type { Metadata } from 'next';
 import { Award, Coins, Link2, TrendingUp, Users } from 'lucide-react';
 
-import { compact, dateTime, nf, relative, tokens } from '@/lib/format';
+import { compact, nf } from '@/lib/format';
 import { pct } from '@/lib/utils';
 import { Card, CardBody, CardHead, CardSub, CardTitle } from '@/components/ui/Card';
 import { CountryChip } from '@/components/ui/Avatar';
-import { DataTable, type Column } from '@/components/ui/DataTable';
-import { EmptyState } from '@/components/ui/EmptyState';
 import { Pill } from '@/components/ui/Pill';
 import { ProgressBar } from '@/components/ui/Progress';
 import { StatCard } from '@/components/ui/StatCard';
@@ -15,6 +13,7 @@ import { GeoBubbles } from '@/components/charts/GeoBubbles';
 import { PageHeader } from '@/components/shell/PageHeader';
 import { AdBanner, AdRail, AdUnit } from '@/components/ads/AdUnit';
 import { ShareBlock } from '@/components/pages/referrals/ShareBlock';
+import { ReferralTable } from '@/components/pages/referrals/ReferralTable';
 import { getReferralSummary, getReferralTiers } from '@/server/social';
 import { requireUser } from '@/server/session';
 import type { ReferralRow } from '@/lib/models';
@@ -61,44 +60,6 @@ export default async function ReferralsPage() {
     { label: 'Dormant', value: summary.rows.filter((r) => r.status === 'dormant').length, color: 'var(--violet)' },
   ];
 
-  const columns: Array<Column<ReferralRow>> = [
-    {
-      id: 'user',
-      header: 'Username',
-      sortValue: (r) => r.username,
-      cell: (r) => (
-        <span className="flex items-center gap-2">
-          <CountryChip code={r.countryCode} />
-          <span className="text-text">{r.username}</span>
-          {r.qualified ? <Pill tone="mint">Qualified</Pill> : null}
-        </span>
-      ),
-    },
-    {
-      id: 'earned',
-      header: 'Commission paid',
-      numeric: true,
-      sortValue: (r) => r.earned,
-      cell: (r) => (r.earned ? tokens(r.earned) : <span className="text-text-3">—</span>),
-    },
-    { id: 'level', header: 'Level', numeric: true, sortValue: (r) => r.level, cell: (r) => r.level },
-    {
-      id: 'joined',
-      header: 'Joined',
-      sortValue: (r) => Date.parse(r.joined),
-      cell: (r) => <span className="text-text-3">{dateTime(r.joined)}</span>,
-    },
-    {
-      id: 'active',
-      header: 'Last active',
-      sortValue: (r) => Date.parse(r.lastActive),
-      cell: (r) => (
-        <Pill tone={STATUS_TONE[r.status]}>
-          {STATUS_LABEL[r.status]} · {relative(r.lastActive)}
-        </Pill>
-      ),
-    },
-  ];
 
   return (
     <>
@@ -219,21 +180,7 @@ export default async function ReferralsPage() {
               </div>
               <Pill>{summary.rows.length}</Pill>
             </CardHead>
-            <DataTable
-              caption="Everyone who joined with your referral link"
-              columns={columns}
-              rows={summary.rows}
-              getRowKey={(r) => r.uid}
-              initialSort={{ id: 'joined', dir: 'desc' }}
-              maxHeight={520}
-              empty={
-                <EmptyState
-                  art="inbox"
-                  title="No referrals yet"
-                  body={`Share the link above. You keep ${summary.rate}% of everything they earn, for as long as they earn it.`}
-                />
-              }
-            />
+            <ReferralTable rows={summary.rows} rate={summary.rate} />
           </Card>
         </div>
 
