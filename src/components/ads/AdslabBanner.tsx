@@ -30,14 +30,20 @@ import {
 
 export function AdslabBanner({
   size,
+  placement,
   className,
 }: {
   size: AdslabBannerSize;
+  /** Makes the container id unique when the same size appears twice on a page. */
+  placement?: string;
   className?: string;
 }) {
   const pathname = usePathname();
   const unit = ADSLAB_BANNER_UNITS[size];
-  const containerId = `adslab-banner-${unit}`;
+  /* The container id includes the placement because ONE page can legitimately
+     show the same size in two slots (a rail and a footer). Two divs with the same
+     id would leave the second permanently empty. */
+  const containerId = `adslab-${unit}-${(placement ?? 'default').replace(/[^a-zA-Z0-9-]/g, '-')}`;
   const queued = React.useRef(false);
 
   React.useEffect(() => {
@@ -61,9 +67,8 @@ export function AdslabBanner({
 
   return (
     <div
-      key={`${unit}-${pathname}`}
+      key={`${containerId}-${pathname}`}
       id={containerId}
-      aria-hidden="true"
       className={className}
       style={{ width, height, maxWidth: '100%', margin: '0 auto' }}
     />

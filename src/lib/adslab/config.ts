@@ -35,6 +35,31 @@ export const ADSLAB_BANNER_UNITS = {
 
 export type AdslabBannerSize = keyof typeof ADSLAB_BANNER_UNITS;
 
+/* ---- FORMAT -> ADSLAB SIZE ------------------------------------------------
+   Which of our ad formats AdsLab can actually fill, and with which unit.
+
+   Only exact size matches are listed. Formats AdsLab has no unit for
+   (largeLeaderboard 970x90, billboard 970x250, native, video, the overlay
+   formats) are deliberately absent: stretching a 728x90 creative into a 970x250
+   box produces a blurry ad the network may reject, and a missing entry simply
+   means "AdsLab does not fill this slot" rather than a broken one. */
+export const ADSLAB_FORMAT_SIZE: Record<string, AdslabBannerSize> = {
+  leaderboard: '728x90',
+  banner: '468x60',
+  rectangle: '300x250',
+  largeRectangle: '336x280',
+  halfPage: '300x600',
+  skyscraper: '160x600',
+  mobileBanner: '320x50',
+  mobileLarge: '320x100',
+  mobileRectangle: '300x250',
+};
+
+/** The AdsLab banner unit for one of our formats, or null when they have none. */
+export function adslabUnitForFormat(format: string): AdslabBannerSize | null {
+  return ADSLAB_FORMAT_SIZE[format] ?? null;
+}
+
 export const ADSLAB_SDK_URL = 'https://adslab.me/api/sdk.js';
 export const ADSLAB_BANNER_JS = 'https://serve.adslab.me/api/banner/js';
 

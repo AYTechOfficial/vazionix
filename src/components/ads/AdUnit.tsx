@@ -6,6 +6,8 @@ import { cn } from '@/lib/utils';
 import { AD_FORMATS, formatDimensions, type AdFormatId } from '@/lib/ads/formats';
 import { getPlacement, type PlacementId } from '@/lib/ads/placements';
 import type { AdUnitConfig } from '@/lib/ads/config';
+import { adslabConfigured, adslabUnitForFormat } from '@/lib/adslab/config';
+import { AdslabBanner } from './AdslabBanner';
 import { useAds } from './AdProvider';
 
 /* ============================================================================
@@ -202,8 +204,20 @@ export function AdUnit({ placement, format: formatOverride, className, bare = fa
   if (!behaviour.enabled || isExempt) return null;
 
   const live = unit && !capped;
-  const showPlaceholder = !live && behaviour.showPlaceholders;
-  if (!live && !behaviour.showPlaceholders) return null;
+
+  /* ---- ADSLAB FALLBACK ----------------------------------------------------
+     A placement with no unit pasted in the admin console is dead inventory. When
+     AdsLab is configured and publishes a unit at this exact size, fill the slot
+     with it rather than rendering an empty box — that is the difference between
+     "82 placements exist" and "82 placements earn".
+
+     A hand-configured unit ALWAYS wins: the console is the operator's override,
+     and silently outbidding it with AdsLab would make the console a lie. Exact
+     sizes only, so no creative is ever stretched. */
+  const adslabSize = !live && adslabConfigured && !capped ? adslabUnitForFormat(desktopFormat) : null;
+
+  const showPlaceholder = !live && !adslabSize && behaviour.showPlaceholders;
+  if (!live && !adslabSize && !behaviour.showPlaceholders) return null;
 
   /* CSS custom properties carry both sizes; the media query in globals.css
      switches which pair the box uses. Fluid formats get a min-height only. */
@@ -224,6 +238,7 @@ export function AdUnit({ placement, format: formatOverride, className, bare = fa
       aria-label="Advertisement"
     >
       {live && !bare ? <AdLabel /> : null}
+      {!live && adslabSize && !bare ? <AdLabel /> : null}
 
       {live && unit ? (
         unit.kind === 'container' && unit.src && unit.containerId ? (
@@ -245,6 +260,8 @@ export function AdUnit({ placement, format: formatOverride, className, bare = fa
             title={`Advertisement — ${desktop.label}`}
           />
         ) : null
+      ) : adslabSize ? (
+        <AdslabBanner size={adslabSize} placement={placement} />
       ) : showPlaceholder ? (
         <Placeholder
           format={desktopFormat}
