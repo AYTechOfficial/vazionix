@@ -3,6 +3,15 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 
 import { AppError, badRequest, db, int, iso, isoOr, now, num, str, tooMany } from '../db';
+import { isSupabaseBackend } from '@/lib/backend';
+import {
+  supabaseConsumeTaskSession,
+  supabaseGetTaskSession,
+  supabaseOpenTaskSession,
+  supabaseSetTaskCooldown,
+  supabaseTaskCooldown,
+  supabaseTaskCooldowns,
+} from '../data-supabase';
 
 /* ============================================================================
    TIMED TASKS — the shared mechanic behind PTC and shortlinks
@@ -52,9 +61,17 @@ const newToken = () => randomBytes(18).toString('base64url');
 export const cooldownKey = (kind: TaskKind, itemId: string) => `${kind}_${itemId}`;
 
 export async function assertNotCoolingDown(uid: string, kind: TaskKind, itemId: string): Promise<void> {
-  const snap = await cooldownRef(uid, cooldownKey(kind, itemId)).get();
-  if (!snap.exists) return;
-  const nextAt = iso(snap.get('nextAt'));
+  let nextAt: string | null = null;
+
+  if (isSupabaseBackend) {
+    const row = await supabaseTaskCooldown(uid, cooldownKey(kind, itemId));
+    nextAt = row?.next_at ? new Date(row.next_at as string).toISOString() : null;
+  } else {
+    const snap = await cooldownRef(uid, cooldownKey(kind, itemId)).get();
+    if (!snap.exists) return;
+    nextAt = iso(snap.get('nextAt'));
+  }
+
   const ms = nextAt ? Date.parse(nextAt) : 0;
   if (ms > Date.now()) {
     const seconds = Math.ceil((ms - Date.now()) / 1000);
@@ -71,17 +88,26 @@ export async function cooldownMap(
   const out: Record<string, string | null> = {};
   if (!itemIds.length) return out;
 
-  /* One query over the user's cooldown subcollection beats N document gets: the
-     catalogue is dozens of items and a page render must not fan out. */
-  const snap = await db()
-    .collection(`users/${uid}/cooldowns`)
-    .where('kind', '==', kind)
-    .get();
-
   const byItem = new Map<string, string | null>();
-  for (const doc of snap.docs) {
-    const at = iso(doc.get('nextAt'));
-    byItem.set(str(doc.get('itemId'), doc.id.replace(`${kind}_`, '')), at);
+
+  if (isSupabaseBackend) {
+    const rows = await supabaseTaskCooldowns(uid, kind);
+    for (const row of rows) {
+      const at = row.next_at ? new Date(row.next_at as string).toISOString() : null;
+      byItem.set(String(row.item_id ?? ''), at);
+    }
+  } else {
+    /* One query over the user's cooldown subcollection beats N document gets: the
+       catalogue is dozens of items and a page render must not fan out. */
+    const snap = await db()
+      .collection(`users/${uid}/cooldowns`)
+      .where('kind', '==', kind)
+      .get();
+
+    for (const doc of snap.docs) {
+      const at = iso(doc.get('nextAt'));
+      byItem.set(str(doc.get('itemId'), doc.id.replace(`${kind}_`, '')), at);
+    }
   }
 
   for (const id of itemIds) {
@@ -103,6 +129,28 @@ export async function openTaskSession(args: {
   const token = newToken();
   const startedAt = new Date();
   const expiresAt = new Date(startedAt.getTime() + ttl * 1000);
+
+  if (isSupabaseBackend) {
+    /* The delete-then-insert inside this helper is what stops two tabs both
+       holding an open session for the same item. */
+    await supabaseOpenTaskSession({
+      token,
+      userId: args.uid,
+      kind: args.kind,
+      itemId: args.itemId,
+      requiredSeconds: required,
+      startedAt,
+      expiresAt,
+    });
+    return {
+      token,
+      kind: args.kind,
+      itemId: args.itemId,
+      requiredSeconds: required,
+      startedAt: startedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
 
   /* Close any session the user already had open for this item, so two tabs
      cannot both complete. */
@@ -156,6 +204,41 @@ export async function closeTaskSession(args: {
 }): Promise<ClosedSession> {
   if (!args.token || args.token.length < 10) throw badRequest('Missing task token.', 'bad_token');
 
+  if (isSupabaseBackend) {
+    const row = await supabaseGetTaskSession(args.uid, args.token);
+    if (!row) {
+      throw badRequest('That task session is not open. Start the task again.', 'session_missing');
+    }
+    if (String(row.kind) !== args.kind) throw badRequest('Task type mismatch.', 'bad_token');
+
+    const startedMs = Date.parse(String(row.started_at));
+    const expiresMs = Date.parse(String(row.expires_at));
+    const required = int(row.required_seconds, 1);
+    const elapsed = Math.floor((Date.now() - startedMs) / 1000);
+
+    if (Number.isFinite(expiresMs) && Date.now() > expiresMs) {
+      await supabaseConsumeTaskSession(args.uid, args.token);
+      throw badRequest('That task expired. Start it again.', 'session_expired');
+    }
+
+    const grace = Math.max(0, args.graceSeconds ?? 2);
+    if (elapsed + grace < required) {
+      throw badRequest(
+        `Stay on the page for the full ${required} seconds — ${required - elapsed}s left.`,
+        'too_fast',
+      );
+    }
+
+    /* Consume LAST, and only credit if this call is the one that removed the
+       token. Two simultaneous completions therefore pay exactly once. */
+    const consumed = await supabaseConsumeTaskSession(args.uid, args.token);
+    if (!consumed) {
+      throw badRequest('That task session is not open. Start the task again.', 'session_missing');
+    }
+
+    return { itemId: String(row.item_id ?? ''), requiredSeconds: required, elapsedSeconds: elapsed };
+  }
+
   const ref = sessionRef(args.uid, args.token);
 
   return db().runTransaction<ClosedSession>(async (tx) => {
@@ -198,6 +281,10 @@ export async function setCooldown(
   hours: number,
 ): Promise<string> {
   const nextAt = new Date(Date.now() + Math.max(0, num(hours, 24)) * 3600 * 1000);
+  if (isSupabaseBackend) {
+    await supabaseSetTaskCooldown(uid, cooldownKey(kind, itemId), kind, itemId, nextAt);
+    return nextAt.toISOString();
+  }
   await cooldownRef(uid, cooldownKey(kind, itemId)).set(
     { kind, itemId, nextAt, lastCompletedAt: now(), updatedAt: now() },
     { merge: true },

@@ -271,6 +271,217 @@ export async function supabaseGetStaff(uid: string): Promise<Record<string, unkn
   return data ?? null;
 }
 
+/* ---- TIMED TASKS (PTC / shortlinks) ------------------------------------- */
+
+/** All per-item cooldowns of one kind for a user, in one query. */
+export async function supabaseTaskCooldowns(uid: string, kind: string) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('user_cooldowns')
+    .select('item_id, next_at')
+    .eq('user_id', uid)
+    .eq('task_kind', kind);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** One item's cooldown row. */
+export async function supabaseTaskCooldown(uid: string, kindKey: string) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('user_cooldowns')
+    .select('next_at')
+    .eq('user_id', uid)
+    .eq('kind', kindKey)
+    .maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+/** Write a per-item cooldown after a credit. */
+export async function supabaseSetTaskCooldown(
+  uid: string,
+  kindKey: string,
+  taskKind: string,
+  itemId: string,
+  nextAt: Date,
+): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase.from('user_cooldowns').upsert(
+    {
+      user_id: uid,
+      kind: kindKey,
+      task_kind: taskKind,
+      item_id: itemId,
+      next_at: nextAt.toISOString(),
+      last_completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id,kind' },
+  );
+  if (error) throw error;
+}
+
+/** Replace any open session for this (user, kind, item) and insert a new one. */
+export async function supabaseOpenTaskSession(row: {
+  token: string;
+  userId: string;
+  kind: string;
+  itemId: string;
+  requiredSeconds: number;
+  startedAt: Date;
+  expiresAt: Date;
+}): Promise<void> {
+  const supabase = bc();
+  await supabase
+    .from('task_sessions')
+    .delete()
+    .eq('user_id', row.userId)
+    .eq('kind', row.kind)
+    .eq('item_id', row.itemId);
+  const { error } = await supabase.from('task_sessions').insert({
+    token: row.token,
+    user_id: row.userId,
+    kind: row.kind,
+    item_id: row.itemId,
+    required_seconds: row.requiredSeconds,
+    started_at: row.startedAt.toISOString(),
+    expires_at: row.expiresAt.toISOString(),
+  });
+  if (error) throw error;
+}
+
+export async function supabaseGetTaskSession(uid: string, token: string) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('task_sessions')
+    .select('*')
+    .eq('token', token)
+    .eq('user_id', uid)
+    .maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+/** Consume the token. Returns true when THIS call deleted it, which is what
+    makes completion single-use under concurrency. */
+export async function supabaseConsumeTaskSession(uid: string, token: string): Promise<boolean> {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('task_sessions')
+    .delete()
+    .eq('token', token)
+    .eq('user_id', uid)
+    .select('token');
+  if (error) throw error;
+  return (data ?? []).length > 0;
+}
+
+/* ---- CATALOGUE (generic single-row / list reads by table) ---------------- */
+
+/** Enabled rows of a catalogue table, ordered by a reward-ish column. */
+export async function supabaseListEnabled(
+  table: string,
+  orderBy: string,
+  limit: number,
+): Promise<Array<Record<string, unknown>>> {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from(table)
+    .select('*')
+    .eq('enabled', true)
+    .order(orderBy, { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** One row of a catalogue table by id. */
+export async function supabaseGetRow(table: string, id: string): Promise<Record<string, unknown> | null> {
+  const supabase = bc();
+  const { data, error } = await supabase.from(table).select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+/** Patch a row by id (advertiser accounting, counters). */
+export async function supabaseUpdateRow(table: string, id: string, patch: Record<string, unknown>): Promise<void> {
+  const supabase = bc();
+  await supabase.from(table).update(patch).eq('id', id);
+}
+
+/** Per-refId claim counts for one source on the current UTC day. */
+export async function supabaseClaimCountsByRef(
+  uid: string,
+  source: string,
+  dayStartIso: string,
+): Promise<Record<string, number>> {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('claims')
+    .select('ref_id')
+    .eq('user_id', uid)
+    .eq('source', source)
+    .gte('created_at', dayStartIso)
+    .limit(500);
+  if (error) throw error;
+  const out: Record<string, number> = {};
+  for (const row of data ?? []) {
+    const ref = row.ref_id ? String(row.ref_id) : '';
+    if (ref) out[ref] = (out[ref] ?? 0) + 1;
+  }
+  return out;
+}
+
+/* ---- OFFERWALL ----------------------------------------------------------- */
+
+/** A user's conversions, newest first. */
+export async function supabaseListConversions(uid: string, limit = 50) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('offerwall_conversions')
+    .select('*')
+    .eq('user_id', uid)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Insert a conversion. Returns false when the provider's transaction id was
+    already recorded — the routine duplicate-postback path, not an error. */
+export async function supabaseInsertConversion(row: Record<string, unknown>): Promise<boolean> {
+  const supabase = bc();
+  const { error } = await supabase.from('offerwall_conversions').insert(row);
+  if (!error) return true;
+  // 23505 = unique_violation on provider_conversion_id.
+  if ((error as { code?: string }).code === '23505') return false;
+  throw error;
+}
+
+export async function supabaseGetConversionByProviderTx(providerConversionId: string) {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('offerwall_conversions')
+    .select('*')
+    .eq('provider_conversion_id', providerConversionId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+export async function supabaseUpdateConversion(providerConversionId: string, patch: Record<string, unknown>): Promise<void> {
+  const supabase = bc();
+  await supabase.from('offerwall_conversions').update(patch).eq('provider_conversion_id', providerConversionId);
+}
+
+export async function supabaseGetConversionById(id: string) {
+  const supabase = bc();
+  const { data, error } = await supabase.from('offerwall_conversions').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
 /** Mark a user's unread notifications as read. */
 export async function supabaseMarkNotificationsRead(uid: string): Promise<void> {
   const supabase = bc();
