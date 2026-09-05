@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { brand } from '@/lib/brand';
 import { AppShell } from '@/components/shell/AppShell';
+import { AdslabScript } from '@/components/ads/AdslabScript';
 import { getAdConfig, getRates, getSiteConfig } from '@/server/config';
 import { getSessionClaims } from '@/server/session';
 import { getProfile, touchUser } from '@/server/users';
@@ -66,14 +67,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         : null;
 
   return (
-    <AppShell
-      initialCollapsed={collapsed}
-      profile={profile}
-      rates={{ usdPerToken: rates.usdPerToken, spot: rates.spot, updatedAt: rates.updatedAt }}
-      ads={ads}
-      announcement={announcement}
-    >
-      {children}
-    </AppShell>
+    <>
+      {/* AdsLab SDK: signed-in users only, so every impression is attributable. */}
+      <AdslabScript userId={claims.uid} />
+      <AppShell
+        initialCollapsed={collapsed}
+        profile={profile}
+        rates={{ usdPerToken: rates.usdPerToken, spot: rates.spot, updatedAt: rates.updatedAt }}
+        ads={ads}
+        announcement={announcement}
+      >
+        {children}
+      </AppShell>
+    </>
   );
 }

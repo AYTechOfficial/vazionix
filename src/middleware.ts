@@ -125,15 +125,21 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  /* Everything except static assets, the image optimiser, and any path with a
-     file extension. The referral capture has to run on the landing page, which is
-     where shared links point, so this cannot be narrowed to `/admin`.
+  /* Everything except static assets, the image optimiser, any path with a file
+     extension, and the PROVIDER CALLBACK ROUTES.
+
+     WHY THE CALLBACKS ARE EXCLUDED
+     `/api/adslab/*` and `/api/captcha/*` are called by AdsLab's servers, not by a
+     browser. They authenticate with a signature, not a session, and they must not
+     pass through referral capture, the admin perimeter, or anything else that
+     could redirect or rewrite them. A 3xx on a postback is a lost conversion, and
+     AdsLab retries a non-200 indefinitely.
 
      The extension exclusion matters for more than performance: ad networks and
      search engines verify ownership by fetching a file like
      `/6a9922b254e3a41fe63104ef.html` from `public/`. Those requests must reach the
      static handler without a middleware invocation deciding anything about them. */
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|.*\\.[a-zA-Z0-9]+$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|api/adslab|api/captcha|api/tasks|.*\\.[a-zA-Z0-9]+$).*)',
   ],
 };
