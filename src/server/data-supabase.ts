@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { cache } from 'react';
+
 import { isServerSupabaseReady, getServerSupabase } from './supabase';
 
 /* ============================================================================
@@ -13,6 +15,13 @@ import { isServerSupabaseReady, getServerSupabase } from './supabase';
 
    These helpers cover the READ paths the faucet / profile / leaderboard need, so
    the money mutation (rpc) and its surrounding reads all run against Postgres.
+
+   ONE NOTE ON LATENCY
+   Every call here is a network round-trip to the Supabase region. A page that
+   reads the same row from three different modules would pay for it three times,
+   so the hottest read — the user row — is wrapped in React's per-request
+   `cache()`. It is NOT a cross-request cache: the memo lives and dies with the
+   render, so a balance can never be served stale.
    ========================================================================== */
 
 const bc = () => {
@@ -20,13 +29,14 @@ const bc = () => {
   return getServerSupabase();
 };
 
-/** Resolve a user row by app uid. */
-export async function supabaseGetUser(uid: string) {
+/** Resolve a user row by app uid. Memoised per request: getProfile, the faucet
+    state, the daily streak and the challenge progress all want this same row. */
+export const supabaseGetUser = cache(async (uid: string) => {
   const supabase = bc();
   const { data, error } = await supabase.from('users').select('*').eq('id', uid).maybeSingle();
   if (error) throw error;
   return data;
-}
+});
 
 /** Read the economy/rates/site value as JSON from the config table. */
 export async function supabaseGetConfig(key: string): Promise<Record<string, unknown> | null> {

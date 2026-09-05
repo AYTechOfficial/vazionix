@@ -5,6 +5,7 @@ import {
   Layers,
   LifeBuoy,
   Link2,
+  ListChecks,
   Megaphone,
   MessageSquare,
   Receipt,
@@ -69,6 +70,7 @@ export const NAV: NavGroup[] = [
       { id: 'faucet', label: 'Faucet', href: '/faucet', icon: Droplet },
       { id: 'ptc', label: 'PTC ads', href: '/ptc', icon: Megaphone },
       { id: 'shortlinks', label: 'Shortlinks', href: '/shortlinks', icon: Link2 },
+      { id: 'tasks', label: 'Tasks', href: '/tasks', icon: ListChecks },
       {
         id: 'offerwall',
         label: 'Offerwall',
@@ -124,6 +126,7 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   '/ptc': { title: 'PTC ads', sub: 'Paid to click, paid on completion' },
   '/shortlinks': { title: 'Shortlinks', sub: 'Caps reset at 00:00 UTC' },
   '/offerwall': { title: 'Offerwall', sub: 'The highest-paying way to earn here' },
+  '/tasks': { title: 'Tasks', sub: 'Offers, surveys, PTC and Telegram tasks' },
   '/offerwall/history': { title: 'Offerwall history', sub: 'Every conversion and its credit status' },
   '/daily-bonus': { title: 'Daily bonus', sub: 'A compounding streak' },
   '/challenges': { title: 'Challenges', sub: 'Quests with token and experience rewards' },

@@ -76,6 +76,12 @@ export type PlacementId =
   | 'offerwall.rail'
   | 'offerwall.native'
   | 'offerwall.bottom'
+  /* -- Tasks (the AdsLab task wall) ---------------------------------------- */
+  | 'tasks.top'
+  | 'tasks.inGrid'
+  | 'tasks.rail'
+  | 'tasks.native'
+  | 'tasks.bottom'
   /* -- Daily bonus / challenges / lottery ---------------------------------- */
   | 'daily.top'
   | 'daily.afterClaim'
@@ -202,6 +208,12 @@ export const PLACEMENTS: Placement[] = [
   p('offerwall.rail', 'Offerwall', 'Right rail', 'halfPage', 'mobileRectangle'),
   p('offerwall.native', 'Offerwall', 'Under the featured offers', 'native', 'native'),
   p('offerwall.bottom', 'Offerwall', 'Page footer', 'leaderboard', 'mobileLarge'),
+
+  p('tasks.top', 'Tasks', 'Above the page header', 'leaderboard', 'mobileLarge'),
+  p('tasks.inGrid', 'Tasks', 'Inside the task grid', 'inFeed', 'inFeed'),
+  p('tasks.rail', 'Tasks', 'Right rail', 'halfPage', 'mobileRectangle'),
+  p('tasks.native', 'Tasks', 'Under the task list', 'native', 'native'),
+  p('tasks.bottom', 'Tasks', 'Page footer', 'leaderboard', 'mobileLarge'),
 
   /* ---- Daily / challenges / lottery -------------------------------------- */
   p('daily.top', 'Daily bonus', 'Above the page header', 'leaderboard', 'mobileLarge'),
