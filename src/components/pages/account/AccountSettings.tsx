@@ -20,7 +20,7 @@ import { useSession } from '@/components/providers/SessionProvider';
    ----------------------------------------------------------------------------
    Everything a user may change about themselves, and nothing that decides what
    they earn. Balance, level, bonus, referral tier and commission rate are
-   server-owned and are not writable from here or from firestore.rules — the
+   server-owned and are not writable from here or from RLS — the
    settings surface is deliberately narrow so there is no doubt about which
    fields a client can touch.
 
@@ -210,7 +210,7 @@ export function AccountSettings({ profile: initial }: { profile: UserProfile }) 
         </CardHead>
         <CardBody className="flex flex-col gap-3">
           <Alert tone="info">
-            Password changes and email verification go through Firebase Authentication directly. Use the reset
+            Password changes and email verification go through Supabase Authentication directly. Use the reset
             link on the sign-in page to change your password — we never see or store it.
           </Alert>
           <div className="flex flex-wrap gap-2">

@@ -32,7 +32,7 @@ import { getPayoutTicker, getPlatformStats } from '@/server/stats';
 
 export const revalidate = 60;
 
-/** Operator-owned marketing copy. Edit these; they are not read from Firestore
+/** Operator-owned marketing copy. Edit these; they are not read from the database
     because they are not data — they are the words on the page. */
 const TESTIMONIALS = [
   {

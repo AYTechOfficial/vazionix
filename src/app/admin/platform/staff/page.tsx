@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: 'Staff' };
    /admin/platform/staff — who holds a console role
    ----------------------------------------------------------------------------
    `/staff/{uid}` is a MIRROR, not the authority. The role that decides what a
-   request may do lives in the Firebase Auth custom claims on the verified token;
+   request may do lives in the `staff` table, read server-side on every guarded request;
    these documents exist so the console can show a display name next to a uid without
    an Auth lookup per row.
 
@@ -53,7 +53,7 @@ export default async function StaffPage() {
           value: nf(byRole.size),
           sub: [...byRole.keys()].join(', ') || 'none',
         },
-        { label: 'Authority', value: 'Auth claims', sub: 'these documents are a display mirror' },
+        { label: 'Authority', value: 'The staff table', sub: 'read on every guarded request' },
       ]}
     >
       {rows.length ? (
@@ -61,7 +61,7 @@ export default async function StaffPage() {
           <CardHead>
             <div>
               <CardTitle>Staff records</CardTitle>
-              <CardSub>Read-only — a role change is a Firebase Auth write, not a Firestore one</CardSub>
+              <CardSub>Read-only — roles change through the role editor, not this table</CardSub>
             </div>
           </CardHead>
           <div className="w-full overflow-auto">
@@ -108,7 +108,7 @@ export default async function StaffPage() {
         <NotConfigured
           what="Staff records"
           collection="/staff"
-          how="A document is written by setStaffRole() when a Super Admin grants a console role. Until then the console still works — it falls back to the email local part for a display name — because the role itself lives in the Auth token, not here."
+          how="A row is written by grant-staff or the role editor when a Super Admin grants a console role. Until then there is nothing to show — no operator holds a role, including this screen."
         />
       )}
 
@@ -121,13 +121,14 @@ export default async function StaffPage() {
         </CardHead>
         <CardBody className="text-13 leading-body text-text-3">
           <p>
-            A role is a Firebase Auth custom claim, set with the Admin SDK. It rides inside the ID token, so a
-            permission check costs zero document reads — which is why the same check is affordable in the server
-            guard, in the security rules and in every callable.
+            A role is a row in the <code className="font-mono text-12">staff</code> table, resolved by the server
+            guard from the verified Supabase session on every guarded request. There is no client-readable
+            cookie or claim that carries authority — the browser only ever holds the session cookie, and the
+            guard is the only thing that maps it to permissions.
           </p>
           <p className="mt-2">
-            Consequence worth knowing: a claim change only takes effect on the next token refresh. Revoking
-            someone urgently means revoking their sessions, not editing a row.{' '}
+            Consequence worth knowing: a role change takes effect on the very next request, because the guard
+            reads the table live. Revoking someone urgently means editing their row.{' '}
             <Link href="/admin/platform/roles" className="font-semibold text-text-2 hover:text-text">
               The permission matrix
             </Link>{' '}

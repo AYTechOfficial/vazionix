@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
    NOT CONFIGURED
    ----------------------------------------------------------------------------
    The honest empty state for a console screen whose backing collection has no
-   documents yet. It names the Firestore path, says which action creates the first
+   rows yet. It names the table, says which action creates the first
    record, and stops.
 
    This replaces a marker component that used to say "specified in the prototype".
@@ -23,7 +23,7 @@ export function NotConfigured({
 }: {
   /** What this screen shows, in plain words: "Withdrawal reversals". */
   what: string;
-  /** The Firestore path that drives it: "/reversals". */
+  /** The table that drives it: "reversals". */
   collection: string;
   /** How the first record gets created. */
   how: React.ReactNode;

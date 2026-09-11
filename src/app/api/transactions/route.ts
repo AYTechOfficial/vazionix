@@ -8,7 +8,7 @@ import { listLedger } from '@/server/ledger';
    GET /api/transactions?cursor=&limit=&source=
    ----------------------------------------------------------------------------
    Cursor-paged ledger. The cursor is the last row's ISO timestamp rather than an
-   offset, because Firestore bills `offset(n)` as n reads — paging deep into a
+   offset, because deep keyset paging needs an ever-older timestamp — paging deep into a
    ledger with offsets costs the whole ledger.
    ========================================================================== */
 

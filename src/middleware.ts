@@ -14,33 +14,25 @@ import { brand } from '@/lib/brand';
       the terms, and a signup ten minutes later — and the shared link never
       appears in the address bar with an attribution parameter attached.
 
-   2. THE ADMIN PERIMETER. Middleware runs on the EDGE runtime, where
-      `firebase-admin` cannot run: it needs Node crypto, a long-lived JWKS cache
-      and a filesystem. So this file CANNOT verify a Firebase session cookie.
-      Everything it decides is based on the presence and shape of cookies, both of
-      which a caller controls.
+   2. THE ADMIN PERIMETER. Middleware runs on the EDGE runtime and cannot verify
+      the Supabase session (that needs a server-side round-trip). Everything it
+      decides is based on the PRESENCE and SHAPE of cookies, both of which a
+      caller controls.
 
       It is therefore a ROUTER, not a gate:
-        • no session cookie      → /admin/login, saving an anonymous visitor a
-                                   rendered shell and a wasted round-trip
-        • session, no role hint  → /admin/403, the "signed in as a normal user,
-                                   opened the staff console" case
-        • session + role hint    → through to the page, where `requirePermission`
-                                   verifies the real cookie with the Admin SDK and
-                                   refuses if the hint was a lie
+        • no auth cookie       → /admin/login, saving an anonymous visitor a
+                                 rendered shell and a wasted round-trip
+        • auth cookie present  → through to the page, where `requirePermission`
+                                 verifies the session with supabase.auth.getUser()
+                                 and reads the role from public.staff
 
-      THE ROLE HINT IS NOT A CREDENTIAL. It is readable and writable by any script
-      on the origin, and forging it buys exactly one thing: the privilege of being
-      refused half a millisecond later by `src/lib/admin/guard.ts`, which reads the
-      signed httpOnly cookie and the custom claims inside it. Treat this file as
-      UX, and the guard plus `firestore.rules` as security.
+      THE COOKIE PRESENCE IS NOT A CREDENTIAL. Forging one buys exactly one thing:
+      the privilege of being refused half a millisecond later by
+      `src/lib/admin/guard.ts`. Treat this file as UX, and the guard plus RLS as
+      security.
    ========================================================================== */
 
-const SESSION_COOKIE = `${brand.slug}-session`;
-const ROLE_HINT_COOKIE = `${brand.slug}-admin-role`;
 const REFERRAL_COOKIE = `${brand.slug}-ref`;
-
-const VALID_ROLE_HINTS = new Set(['super_admin', 'admin', 'finance', 'moderator', 'support']);
 
 /** Reachable without a staff session: the login screen and the refusal surface.
     Redirecting the 403 page to the 403 page is a loop. */
@@ -76,19 +68,14 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  /* Which cookie carries the session depends on the backend. Firebase mints
-     `<slug>-session`; Supabase writes its own chunked `sb-<ref>-auth-token`
-     cookies. Either way this is only a PRESENCE check — middleware runs on the
-     Edge and verifies nothing. */
-  const supabaseBackend = process.env.DATA_BACKEND !== 'firebase';
-  const hasSupabaseSession = request.cookies
+  /* Supabase writes its own chunked `sb-<ref>-auth-token` cookies. This is only
+     a PRESENCE check — middleware runs on the Edge and verifies nothing; the
+     page behind it does the real verification. */
+  const hasSession = request.cookies
     .getAll()
     .some((c) => c.name.startsWith('sb-') && c.name.includes('auth-token'));
-  const session = supabaseBackend
-    ? hasSupabaseSession
-    : Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
-  if (!session) {
+  if (!hasSession) {
     const url = request.nextUrl.clone();
     url.pathname = '/admin/login';
     url.search = '';
@@ -99,24 +86,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  /* The role hint exists only on the Firebase path, where it saves a non-staff
-     visitor a rendered shell. On Supabase the role lives in `public.staff`,
-     which the Edge cannot read, so the hint is skipped and the real decision is
-     made by `requirePermission()` against that table. Skipping a cosmetic hint
-     costs one rendered redirect; it grants nothing, because the hint was never a
-     credential. */
-  if (!supabaseBackend) {
-    const roleHint = request.cookies.get(ROLE_HINT_COOKIE)?.value;
-    if (!roleHint || !VALID_ROLE_HINTS.has(roleHint)) {
-      const url = request.nextUrl.clone();
-      url.pathname = '/admin/403';
-      url.search = '';
-      url.searchParams.set('reason', 'not-staff');
-      return NextResponse.redirect(url);
-    }
-  }
-
-  /* Looks like staff. The page verifies for real. `x-admin-route` is a
+  /* Looks signed in. The page verifies for real. `x-admin-route` is a
      convenience for logging, never for authorisation; an incoming copy is
      overwritten so a caller cannot inject one. */
   const headers = new Headers(request.headers);

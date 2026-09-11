@@ -19,9 +19,10 @@ export const metadata: Metadata = { title: 'API keys' };
    video, and no amount of asterisks undoes that.
 
    Rotation is not offered here either. Rotating a key means editing the deployment
-   environment and restarting; a button that wrote a new secret into Firestore would
-   create a second place credentials live, which is exactly the thing to avoid. So this
-   is a checklist: what is set, what is missing, what breaks while it is missing.
+   environment (Catalyst console → Slate → env vars) and redeploying; a button that
+   wrote a new secret into the database would create a second place credentials live,
+   which is exactly the thing to avoid. So this is a checklist: what is set, what is
+   missing, what breaks while it is missing.
    ========================================================================== */
 
 export const dynamic = 'force-dynamic';
@@ -40,10 +41,10 @@ export default async function KeysPage() {
 
   const rows: KeyRow[] = [
     {
-      env: 'FIREBASE_SERVICE_ACCOUNT_KEY',
-      purpose: 'Admin SDK — every server read and write, and session cookie verification',
-      set: has('FIREBASE_SERVICE_ACCOUNT_KEY'),
-      consequence: 'Nothing works. Every page falls back to empty data and the console cannot verify a login.',
+      env: 'SUPABASE_SERVICE_ROLE_KEY',
+      purpose: 'Service-role client — every server read and write in src/server/**',
+      set: has('SUPABASE_SERVICE_ROLE_KEY'),
+      consequence: 'Nothing works. Every page falls back to empty data and no privileged action can run.',
     },
     {
       env: 'FAUCETPAY_API_KEY',
@@ -84,7 +85,7 @@ export default async function KeysPage() {
   ];
 
   const missing = rows.filter((r) => !r.set);
-  const critical = missing.filter((r) => r.env === 'FIREBASE_SERVICE_ACCOUNT_KEY').length;
+  const critical = missing.filter((r) => r.env === 'SUPABASE_SERVICE_ROLE_KEY').length;
 
   return (
     <ScaffoldPage
@@ -113,8 +114,8 @@ export default async function KeysPage() {
     >
       {critical ? (
         <Alert tone="danger">
-          <strong>FIREBASE_SERVICE_ACCOUNT_KEY is not set.</strong> The Admin SDK cannot start, so every read
-          returns empty and no login can be verified. Nothing else on this list matters until it is.
+          <strong>SUPABASE_SERVICE_ROLE_KEY is not set.</strong> The service-role client cannot start, so every
+          read returns empty and no privileged action can run. Nothing else on this list matters until it is.
         </Alert>
       ) : null}
 

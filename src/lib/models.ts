@@ -1,11 +1,12 @@
 /* ============================================================================
    READ MODELS
    ----------------------------------------------------------------------------
-   The shapes UI components render. Plain JSON only: no Firestore Timestamp, no
+   The shapes UI components render. Plain JSON only: no Postgres timestamp, no
    class instance, no `undefined`. Everything crossing the server/client
    boundary is one of these, which is why every date is an ISO string.
 
-   Persistence shapes live in `src/lib/firebase/schema.ts`. Server code maps
+   Persistence shapes live in the Supabase schema (supabase/migrations). Server
+   code maps
    one to the other in `src/server/**`.
    ========================================================================== */
 

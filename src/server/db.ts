@@ -1,34 +1,23 @@
 import 'server-only';
 
-import { FieldValue, Timestamp, type DocumentSnapshot, type Query } from 'firebase-admin/firestore';
-
-import { getAdminDb } from '@/lib/firebase/admin';
-
 /* ============================================================================
    SERVER DATA ACCESS — primitives
    ----------------------------------------------------------------------------
-   Everything under `src/server/**` reads and writes through here, so there is
-   exactly one place that knows how a Firestore document becomes JSON safe to
-   hand a Client Component.
+   Supabase (Postgres) is the single data backend. Everything under
+   `src/server/**` goes through either:
+     • the service-role client + typed helpers in src/server/data-supabase.ts
+     • the money-path RPCs (credit/debit/refund) in src/server/supabase.ts
 
    THE TIMESTAMP RULE
-   A Firestore Timestamp is a class instance. Passing one from a Server
-   Component to a Client Component throws at serialisation time, and passing one
-   through `JSON.stringify` silently produces `{_seconds, _nanoseconds}` that no
-   date formatter understands. Every read model therefore carries ISO strings,
-   converted here and nowhere else.
+   Postgres returns timestamptz as ISO strings through supabase-js, but a value
+   can still arrive here as a Date, a legacy {_seconds} shape, or a plain
+   string. Every read model carries ISO strings, converted here and nowhere
+   else, so no component ever re-implements date coercion.
    ========================================================================== */
 
-export { FieldValue, Timestamp };
-
-export const db = () => getAdminDb();
-
-export const now = () => FieldValue.serverTimestamp();
-
-/** Timestamp | Date | null → ISO string | null. */
+/** Timestamp | Date | string | number | null → ISO string | null. */
 export function iso(value: unknown): string | null {
   if (!value) return null;
-  if (value instanceof Timestamp) return value.toDate().toISOString();
   if (value instanceof Date) return value.toISOString();
   if (typeof value === 'string') return value;
   if (typeof value === 'number') return new Date(value).toISOString();
@@ -48,7 +37,7 @@ export const toMillis = (value: unknown): number => {
   return s ? Date.parse(s) : 0;
 };
 
-/** Coerce anything Firestore hands back into a finite integer. */
+/** Coerce anything into a finite integer. */
 export const int = (value: unknown, fallback = 0): number => {
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
@@ -64,20 +53,6 @@ export const str = (value: unknown, fallback = ''): string =>
 
 export const bool = (value: unknown, fallback = false): boolean =>
   typeof value === 'boolean' ? value : fallback;
-
-/** `{ id, ...data }` with no Timestamp instances left inside. */
-export function withId<T extends Record<string, unknown>>(snap: DocumentSnapshot): T & { id: string } {
-  return { id: snap.id, ...(snap.data() ?? {}) } as T & { id: string };
-}
-
-/** Run a query and map each doc, tolerating a missing collection. */
-export async function mapQuery<T>(
-  query: Query,
-  map: (snap: DocumentSnapshot) => T,
-): Promise<T[]> {
-  const snap = await query.get();
-  return snap.docs.map(map);
-}
 
 /* ---- UTC DAY KEYS ----------------------------------------------------------
    Daily caps, streaks and "today" counters all key off the same UTC day
@@ -132,13 +107,10 @@ export const notFound = (message = 'Not found.') => new AppError(message, 404, '
 export const conflict = (message: string, code = 'conflict') => new AppError(message, 409, code);
 export const tooMany = (message: string, code = 'rate_limited') => new AppError(message, 429, code);
 
-/** True when the Admin SDK has enough credentials to reach Firestore. */
-export function isServerFirebaseReady(): boolean {
+/** True when the server has the Supabase credentials it needs. */
+export function isServerDataReady(): boolean {
   return Boolean(
-    process.env.FIREBASE_SERVICE_ACCOUNT_KEY ||
-      process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-      process.env.FIRESTORE_EMULATOR_HOST ||
-      process.env.GCLOUD_PROJECT ||
-      process.env.K_SERVICE,
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_DB_PASSWORD),
   );
 }

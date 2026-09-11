@@ -156,12 +156,19 @@ export async function supabaseGetCompletedWithdrawals(limit = 12) {
   return data ?? [];
 }
 
-/** Daily stats in ascending day order (newest N days). */
+/** Daily stats, newest N days, returned in ascending day order for the charts.
+    The 'global' lifetime row is excluded, and the fetch is descending-then-
+    reversed so a young project does not silently return its OLDEST rows. */
 export async function supabaseGetDailyStats(days: number): Promise<Array<Record<string, unknown>>> {
   const supabase = bc();
-  const { data, error } = await supabase.from('stats').select('*').order('day', { ascending: true }).limit(days);
+  const { data, error } = await supabase
+    .from('stats')
+    .select('*')
+    .neq('day', 'global')
+    .order('day', { ascending: false })
+    .limit(Math.max(1, days));
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []).slice().reverse();
 }
 
 /** Leaderboard entries for a board, highest value first. */
@@ -742,4 +749,230 @@ export async function supabaseEarningsByDay(uid: string, days: number) {
     .limit(3000);
   if (error) throw error;
   return data ?? [];
+}
+/* ---- AUDIT LOG ------------------------------------------------------------
+   Written by every staff action (src/server/admin.ts), read by the console's
+   audit page. detail is a JSON string: the column is jsonb and a bare text
+   value would fail the cast. */
+
+export async function supabaseInsertAudit(entry: {
+  actorUid: string;
+  actorName?: string;
+  action: string;
+  target?: string;
+  detail?: string;
+  ip?: string | null;
+}): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase.from('audit_log').insert({
+    actor_uid: entry.actorUid,
+    actor_name: entry.actorName ?? entry.actorUid,
+    action: entry.action,
+    target: entry.target ?? null,
+    detail: JSON.stringify(entry.detail ?? ''),
+    created_at: new Date().toISOString(),
+  });
+  if (error) throw error;
+}
+
+export async function supabaseListAudit(limit = 50): Promise<Array<Record<string, unknown>>> {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('audit_log')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/* ---- CONFIG / CATALOGUE / AD-UNIT WRITES ----------------------------------
+   The admin console's editors. All go through the service-role client, so RLS
+   never blocks them and no client can reach these tables. */
+
+export async function supabaseUpsertConfig(key: string, patch: Record<string, unknown>): Promise<void> {
+  const supabase = bc();
+  const { data: current, error: readError } = await supabase
+    .from('config')
+    .select('value')
+    .eq('key', key)
+    .maybeSingle();
+  if (readError) throw readError;
+
+  /* Deep-merge the patch over what is there, mirroring the previous merge
+     behaviour the ConfigEditor was built around: an operator edits one reward
+     without restating the whole economy. */
+  const merged = deepMerge((current?.value as Record<string, unknown>) ?? {}, patch);
+
+  const { error } = await supabase
+    .from('config')
+    .upsert({ key, value: merged, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  if (error) throw error;
+}
+
+function deepMerge<T extends Record<string, unknown>>(base: T, patch: Record<string, unknown>): T {
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    const current = out[key];
+    if (
+      current && typeof current === 'object' && !Array.isArray(current) &&
+      value && typeof value === 'object' && !Array.isArray(value)
+    ) {
+      out[key] = deepMerge(current as Record<string, unknown>, value as Record<string, unknown>);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out as T;
+}
+
+/** A catalogue row for the admin editors: id, enabled, fields, updatedAt. */
+export async function supabaseListCatalogue(
+  table: string,
+  limit = 200,
+): Promise<Array<{ id: string; enabled: boolean; fields: Record<string, unknown>; updatedAt: string | null }>> {
+  const supabase = bc();
+  const { data, error } = await supabase.from(table).select('*').limit(limit);
+  if (error) throw error;
+  return (data ?? []).map((row) => {
+    const r = row as Record<string, unknown>;
+    const { id, enabled, updated_at, created_at: _created, ...fields } = r;
+    return {
+      id: String(id),
+      enabled: enabled !== false,
+      fields,
+      updatedAt: updated_at ? new Date(updated_at as string).toISOString() : null,
+    };
+  });
+}
+
+export async function supabaseUpsertCatalogue(
+  table: string,
+  id: string | null,
+  fields: Record<string, unknown>,
+): Promise<string> {
+  const supabase = bc();
+  const nowIso = new Date().toISOString();
+  if (id) {
+    const { error } = await supabase
+      .from(table)
+      .update({ ...fields, updated_at: nowIso })
+      .eq('id', id);
+    if (error) throw error;
+    return id;
+  }
+  const { data, error } = await supabase
+    .from(table)
+    .insert({ ...fields, updated_at: nowIso })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return String((data as Record<string, unknown>)?.id ?? '');
+}
+
+export async function supabaseDeleteCatalogue(table: string, id: string): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase.from(table).delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function supabaseListAdUnits(): Promise<Array<Record<string, unknown>>> {
+  const supabase = bc();
+  const { data, error } = await supabase.from('ad_units').select('*');
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function supabaseSaveAdUnit(
+  placementId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase
+    .from('ad_units')
+    .upsert(
+      { placement_id: placementId, ...patch, updated_at: new Date().toISOString() },
+      { onConflict: 'placement_id' },
+    );
+  if (error) throw error;
+}
+
+export async function supabaseDeleteAdUnit(placementId: string): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase.from('ad_units').delete().eq('placement_id', placementId);
+  if (error) throw error;
+}
+
+/* ---- STAFF LIST (console's staff page) ------------------------------------ */
+
+export async function supabaseListStaff(): Promise<Array<Record<string, unknown>>> {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('staff')
+    .select('*')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/* ---- SUPPORT: console ticket list ---------------------------------------- */
+
+export async function supabaseListTickets(
+  status: string | null,
+  limit: number,
+): Promise<Array<Record<string, unknown>>> {
+  const supabase = bc();
+  let q = supabase
+    .from('tickets')
+    .select('*')
+    .order('last_message_at', { ascending: false })
+    .limit(limit);
+  if (status && status !== 'all') q = q.eq('status', status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data ?? [];
+}
+
+/* ---- WITHDRAWAL OPS (console queue) --------------------------------------- */
+
+export async function supabaseGetWithdrawal(id: string): Promise<Record<string, unknown> | null> {
+  const supabase = bc();
+  const { data, error } = await supabase.from('withdrawals').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+/** Claim a withdrawal as Processing by one operator, atomically: only succeeds
+    when the row is still in a pre-processing state, so two simultaneous
+    Approve clicks cannot both send. */
+export async function supabaseClaimWithdrawal(
+  id: string,
+  actor: string,
+): Promise<{ claimed: boolean; row: Record<string, unknown> | null }> {
+  const supabase = bc();
+  const { data, error } = await supabase
+    .from('withdrawals')
+    .update({ status: 'Processing', reviewed_by: actor, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .in('status', ['Pending', 'HeldForReview'])
+    .select('*')
+    .single();
+  if (error) {
+    if (error.code === 'PGRST116') return { claimed: false, row: null }; // no matching row
+    throw error;
+  }
+  return { claimed: true, row: (data as Record<string, unknown>) ?? null };
+}
+
+export async function supabaseUpdateWithdrawal(
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const supabase = bc();
+  const { error } = await supabase
+    .from('withdrawals')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (error) throw error;
 }

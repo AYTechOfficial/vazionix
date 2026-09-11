@@ -16,7 +16,6 @@ import { ShareBlock } from '@/components/pages/referrals/ShareBlock';
 import { ReferralTable } from '@/components/pages/referrals/ReferralTable';
 import { getReferralSummary, getReferralTiers } from '@/server/social';
 import { requireUser } from '@/server/session';
-import type { ReferralRow } from '@/lib/models';
 
 export const metadata: Metadata = { title: 'Referrals' };
 export const dynamic = 'force-dynamic';
@@ -37,18 +36,6 @@ export const dynamic = 'force-dynamic';
    actually hold. There is no acquisition-channel chart, because we do not record
    acquisition channel, and a chart that invents one is worse than no chart.
    ========================================================================== */
-
-const STATUS_TONE: Record<ReferralRow['status'], 'mint' | 'warning' | 'neutral'> = {
-  active: 'mint',
-  idle: 'warning',
-  dormant: 'neutral',
-};
-
-const STATUS_LABEL: Record<ReferralRow['status'], string> = {
-  active: 'Active',
-  idle: 'Idle',
-  dormant: 'Dormant',
-};
 
 export default async function ReferralsPage() {
   const claims = await requireUser();

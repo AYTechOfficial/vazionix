@@ -7,8 +7,6 @@ import { Lock, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { brand } from '@/lib/brand';
 import { ROLES, ADMIN_ROLES } from '@/lib/admin/rbac';
-import { isFirebaseConfigured } from '@/lib/firebase/client';
-import { isFirebaseBackend, isSupabaseBackend } from '@/lib/backend';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
 import { getAuthApi } from '@/lib/auth-api';
 import { Alert } from '@/components/ui/Alert';
@@ -19,8 +17,8 @@ import { Pill } from '@/components/ui/Pill';
 /* ============================================================================
    STAFF SIGN-IN
    ----------------------------------------------------------------------------
-   The same Firebase Auth exchange the user-facing app uses, because staff are
-   Firebase users with extra custom claims rather than a parallel identity system.
+   The same Supabase Auth exchange the user-facing app uses, because staff are
+   Supabase Auth users with staff rows rather than a parallel identity system.
    One auth system means one revocation path.
 
      1. `signInWithEmail` authenticates and POSTs the ID token to
@@ -36,7 +34,7 @@ import { Pill } from '@/components/ui/Pill';
    TWO-FACTOR
    Staff accounts are expected to have TOTP enrolled, and `getAdminSession()`
    refuses a token without an `mfa` claim unless `STAFF_REQUIRE_MFA=false` is set
-   for the initial bootstrap. Firebase's own multi-factor resolver handles the
+   for the initial bootstrap. The auth provider's own multi-factor flow handles the
    challenge during `signInWithEmailAndPassword`, so there is no separate code field
    here to get out of step with it.
    ========================================================================== */
@@ -99,7 +97,7 @@ export function AdminLoginForm({ next }: { next: string }) {
 
         <h1 className="text-24 font-semibold tracking-snug">Sign in to admin</h1>
         <p className="mb-5 mt-2 text-13 text-text-3">
-          Staff accounts only. Access is gated by Firebase custom claims and every action is audit-logged.
+          Staff accounts only. Access is gated by the staff table and every action is audit-logged.
         </p>
 
         <Alert tone="warning" icon={ShieldCheck} className="mb-5">
@@ -107,12 +105,12 @@ export function AdminLoginForm({ next }: { next: string }) {
           support can never move funds.
         </Alert>
 
-        {(isSupabaseBackend ? !isSupabaseConfigured : !isFirebaseConfigured) ? (
+        {!isSupabaseConfigured ? (
           <Alert tone="danger" className="mb-5">
-            {(isSupabaseBackend ? 'Supabase' : 'Firebase')} is not configured, so nobody can sign in. Set the{' '}
-            <code className="font-mono text-12">{(isSupabaseBackend ? 'NEXT_PUBLIC_SUPABASE' : 'NEXT_PUBLIC_FIREBASE') + '_*'}</code>{' '}
+            Supabase is not configured, so nobody can sign in. Set the{' '}
+            <code className="font-mono text-12">NEXT_PUBLIC_SUPABASE_*</code>{' '}
             values and{' '}
-            <code className="font-mono text-12">{isSupabaseBackend ? 'SUPABASE_SERVICE_ROLE_KEY' : 'FIREBASE_SERVICE_ACCOUNT_KEY'}</code>, then bootstrap the first
+            <code className="font-mono text-12">SUPABASE_SERVICE_ROLE_KEY</code>, then bootstrap the first
             admin.
           </Alert>
         ) : null}
@@ -151,7 +149,7 @@ export function AdminLoginForm({ next }: { next: string }) {
             </FieldError>
           ) : null}
 
-          <Button type="submit" variant="primary" size="lg" block disabled={pending || (isSupabaseBackend ? !isSupabaseConfigured : !isFirebaseConfigured)}>
+          <Button type="submit" variant="primary" size="lg" block disabled={pending || !isSupabaseConfigured}>
             <Lock aria-hidden="true" />
             {pending ? 'Signing in…' : 'Sign in'}
           </Button>

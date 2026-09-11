@@ -31,7 +31,7 @@ export const dynamic = 'force-dynamic';
 /* ============================================================================
    DASHBOARD — the home screen
    ----------------------------------------------------------------------------
-   Every number on this page is read from Firestore for the signed-in account:
+   Every number on this page is read from Postgres for the signed-in account:
    the balance, the week's earnings and their week-over-week delta, the daily
    stacked chart, the five most recent ledger rows, the leaderboard standings and
    the faucet cooldown.

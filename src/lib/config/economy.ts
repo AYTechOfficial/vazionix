@@ -2,16 +2,16 @@
    ECONOMY CONFIGURATION
    ----------------------------------------------------------------------------
    Every number that decides what a user earns lives here as a typed default,
-   and every one of them is overridable from Firestore `/config/economy` through
+   and every one of them is overridable from the database `/config/economy` through
    Admin → Modules. Two reasons for the pair:
 
-   • The app has to run against an empty database. A fresh Firebase project has
+   • The app has to run against an empty database. A fresh Supabase project has
      no /config document, and a faucet that pays nothing until you seed it looks
      broken rather than unconfigured.
    • Changing a payout must not need a deploy. Rewards, cooldowns and caps are
      operational levers pulled during a traffic spike, not code.
 
-   Firestore values are merged over these on read (`src/server/config.ts`), so a
+   Config-row values are merged over these on read (`src/server/config.ts`), so a
    partial document only overrides the keys it actually sets.
    ========================================================================== */
 

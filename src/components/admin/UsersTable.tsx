@@ -18,11 +18,11 @@ import { RiskMeter } from './RiskMeter';
    ----------------------------------------------------------------------------
    Reads a page of `listUsers()` output. Everything that changes the result set —
    the search term, the suspended filter, the sort, the page — is a URL parameter
-   handled by the server, because Firestore paging is cursor-based and a cursor
+   handled by the server, because keyset paging is cursor-based and a cursor
    cannot be reconstructed in the browser.
 
    PAGING IS A TRAIL, NOT A PAGE NUMBER
-   `startAfter(doc)` only goes forward. `offset` would go backward but Firestore
+   A keyset cursor only goes forward. `offset` would go backward but Postgres
    bills every skipped document, so page 40 of this table would cost forty pages of
    reads. So "Previous" is implemented by carrying the trail of cursors already
    visited in the URL and popping the last one. It is exact, it costs one page of
@@ -30,7 +30,7 @@ import { RiskMeter } from './RiskMeter';
 
    THE SEARCH BOX IS A PREFIX SEARCH AND SAYS SO
    `listUsers` does a range scan on `usernameLower` plus an exact email match.
-   Firestore has no substring index, so a box that implied `contains` would silently
+   There is no substring index here, so a box that implied `contains` would silently
    miss results — which is worse than a box that states its limit.
 
    CSV EXPORT covers the rows on screen and is prefixed with a UTF-8 BOM; without
@@ -201,7 +201,7 @@ export function UsersTable({
       {rows.length === 0 ? (
         <p className="px-5 py-10 text-center text-13 text-text-3">
           {search
-            ? 'No account matches that. The search is a username prefix or an exact email — Firestore has no substring index.'
+            ? 'No account matches that. The search is a username prefix or an exact email — there is no substring index.'
             : 'No documents in /users yet. The first record appears when somebody registers.'}
         </p>
       ) : (

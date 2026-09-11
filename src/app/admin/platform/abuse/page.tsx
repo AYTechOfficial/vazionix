@@ -156,7 +156,7 @@ export default async function AbusePage() {
       <NotConfigured
         what="Rate-limit and IP reputation rules"
         collection="/config/abuse"
-        how="No such document is read by anything. Per-IP rate limiting belongs in middleware or at the CDN, where it can refuse a request before it costs a Firestore read — not in a document the app consults after already doing the work."
+        how="No such row is read by anything. Per-IP rate limiting belongs in middleware or at the CDN, where it can refuse a request before it costs a database read — not in a row the app consults after already doing the work."
       />
     </ScaffoldPage>
   );

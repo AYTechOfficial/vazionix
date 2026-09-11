@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { nf, relative } from '@/lib/format';
 import { requirePermission } from '@/lib/admin/guard';
-import { countWhere, listCatalogue } from '@/server/admin';
+import { listAdUnits } from '@/server/admin';
 import { ScaffoldPage } from '@/components/admin/ScaffoldPage';
 import { NotConfigured } from '@/components/admin/NotConfigured';
 import { Card, CardHead, CardSub, CardTitle } from '@/components/ui/Card';
@@ -13,14 +14,16 @@ export const metadata: Metadata = { title: 'Creative approval' };
 /* ============================================================================
    /admin/ads/queue — creative approval
    ----------------------------------------------------------------------------
-   The review step between an advertiser submitting a creative and it going live.
-   It reads `/adRequests`, which is also what the sidebar's `ads` badge counts — so
-   the badge and this table can never disagree, which is the fastest way to teach
-   staff to ignore a badge.
+   There is no advertiser submission flow in this build — no intake, no
+   adRequests table, nothing to approve. Network tags never enter a review
+   queue either: you paste those yourself under Inventory, and reviewing your
+   own paste would be theatre.
 
-   Empty on a fresh install, and empty for as long as there is no advertiser
-   submission flow. Network tags bypass this queue entirely: you paste those
-   yourself under Inventory, and reviewing your own paste would be theatre.
+   So this screen cannot list submissions. What it shows instead is the one
+   real pre-flight signal the inventory has: ad units that claim to be live
+   but have no payload to serve — enabled without a tag or a src. Those rows
+   render as dead inventory on member pages, which is exactly what a
+   "needs a decision before it can serve" queue is for.
    ========================================================================== */
 
 export const dynamic = 'force-dynamic';
@@ -28,60 +31,62 @@ export const dynamic = 'force-dynamic';
 export default async function AdQueuePage() {
   await requirePermission('ads.approve');
 
-  const [rows, pending] = await Promise.all([
-    listCatalogue('adRequests', 100),
-    countWhere('adRequests', [['status', '==', 'pending']]),
-  ]);
+  const units = await listAdUnits();
+  const broken = units.filter((u) => u.enabled && !u.hasPayload);
 
   return (
     <ScaffoldPage
       perm="ads.approve"
       title="Creative approval"
-      sub="Submissions waiting on a decision before they can serve"
+      sub="Inventory that needs a decision before it can serve"
       kpis={[
         {
-          label: 'Pending',
-          value: nf(pending),
-          sub: 'the number the sidebar badge shows',
-          tone: pending ? 'danger' : 'success',
+          label: 'Unfilled slots',
+          value: nf(broken.length),
+          sub: 'enabled units with nothing to serve',
+          tone: broken.length ? 'danger' : 'success',
         },
-        { label: 'All submissions', value: nf(rows.length), sub: 'documents in /adRequests' },
+        { label: 'Enabled units', value: nf(units.filter((u) => u.enabled).length), sub: 'in the ad_units table' },
+        { label: 'Submissions', value: 'None', sub: 'no advertiser intake exists' },
       ]}
     >
-      {rows.length ? (
+      {broken.length ? (
         <Card as="section">
           <CardHead>
             <div>
-              <CardTitle>Submissions</CardTitle>
-              <CardSub>Approve and reject are not wired — there is no decision route yet</CardSub>
+              <CardTitle>Enabled but unfilled</CardTitle>
+              <CardSub>
+                These render as dead inventory on member pages — fix them on{' '}
+                <Link href="/admin/ads/inventory" className="text-mint underline underline-offset-2">
+                  Inventory
+                </Link>
+              </CardSub>
             </div>
           </CardHead>
           <div className="w-full overflow-auto">
             <table className="vf-table">
-              <caption className="sr-only">Ad creative submissions</caption>
+              <caption className="sr-only">Ad units enabled without a creative payload</caption>
               <thead>
                 <tr>
-                  <th scope="col">Id</th>
-                  <th scope="col">Advertiser</th>
                   <th scope="col">Placement</th>
-                  <th scope="col">Status</th>
+                  <th scope="col">Kind</th>
+                  <th scope="col">Network</th>
+                  <th scope="col">Payload</th>
                   <th scope="col">Updated</th>
+                  <th scope="col">State</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id}>
-                    <td className="font-mono text-12">{row.id}</td>
-                    <td className="text-text-2">{String(row.fields['advertiser'] ?? '—')}</td>
-                    <td className="font-mono text-12 text-text-3">
-                      {String(row.fields['placement'] ?? '—')}
-                    </td>
+                {broken.map((u) => (
+                  <tr key={u.placement}>
+                    <td className="font-mono text-12 text-text-2">{u.placement}</td>
+                    <td className="text-text-3">{u.kind}</td>
+                    <td className="text-text-3">{u.network}</td>
+                    <td className="text-text-3">none</td>
+                    <td className="text-text-3">{u.updatedAt ? relative(u.updatedAt) : '—'}</td>
                     <td>
-                      <Pill tone={row.fields['status'] === 'pending' ? 'warning' : 'neutral'}>
-                        {String(row.fields['status'] ?? 'unknown')}
-                      </Pill>
+                      <Pill tone="danger">unfilled</Pill>
                     </td>
-                    <td className="text-text-3">{relative(row.updatedAt)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -91,8 +96,8 @@ export default async function AdQueuePage() {
       ) : (
         <NotConfigured
           what="Creative submissions"
-          collection="/adRequests"
-          how="A record appears when an advertiser submits a creative for review. Nothing does that yet, and network tags never enter this queue — those you paste yourself under Ads → Inventory."
+          collection="ad_units"
+          how="Nothing submits a creative for review — there is no advertiser intake, and network tags you paste yourself never enter a queue. Every enabled unit has a payload to serve, so there is nothing waiting on a decision."
         />
       )}
     </ScaffoldPage>

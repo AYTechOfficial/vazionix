@@ -13,22 +13,17 @@ import type {
 } from '@/lib/models';
 
 import { assertCaptcha } from './captcha';
-import type { EconomyConfig, WithdrawConfig } from '@/lib/config/economy';
+import type { WithdrawConfig } from '@/lib/config/economy';
 import type { RatesConfig } from './config';
 import { getEconomy, getPayoutRails, getRates, getSiteConfig } from './config';
-import { isSupabaseBackend } from '@/lib/backend';
 import {
   AppError,
-  FieldValue,
   badRequest,
   bool,
   conflict,
-  db,
   int,
   iso,
   isoOr,
-  isServerFirebaseReady,
-  now,
   str,
 } from './db';
 import * as d from './decimal';
@@ -199,33 +194,17 @@ export async function requestWithdrawal(input: WithdrawRequestInput): Promise<Wi
   }
 
   /* Replay: return the withdrawal this submission already created. */
-  if (isSupabaseBackend) {
-    const { supabaseGetWithdrawalByRequestId, supabaseGetUser } = await import('./data-supabase');
-    const priorRow = await supabaseGetWithdrawalByRequestId(input.uid, input.clientRequestId);
-    if (priorRow) return recordFrom(String(priorRow.id), rowToWithdrawalDoc(priorRow));
-    const userRow = await supabaseGetUser(input.uid);
-    if (!userRow) throw new AppError('Account not found.', 404, 'not_found');
-    const user = userRow as Record<string, unknown>;
-    return finishRequestWithdrawal(input, user, cfg, rates);
-  }
-
-  const prior = await db()
-    .collection('withdrawals')
-    .where('uid', '==', input.uid)
-    .where('clientRequestId', '==', input.clientRequestId)
-    .limit(1)
-    .get();
-  const priorDoc = prior.docs[0];
-  if (priorDoc) return recordFrom(priorDoc.id, priorDoc.data() as Record<string, unknown>);
-
-  const userSnap = await db().doc(`users/${input.uid}`).get();
-  if (!userSnap.exists) throw new AppError('Account not found.', 404, 'not_found');
-  const user = userSnap.data() as Record<string, unknown>;
+  const { supabaseGetWithdrawalByRequestId, supabaseGetUser } = await import('./data-supabase');
+  const priorRow = await supabaseGetWithdrawalByRequestId(input.uid, input.clientRequestId);
+  if (priorRow) return recordFrom(String(priorRow.id), rowToWithdrawalDoc(priorRow));
+  const userRow = await supabaseGetUser(input.uid);
+  if (!userRow) throw new AppError('Account not found.', 404, 'not_found');
+  const user = userRow as Record<string, unknown>;
 
   return finishRequestWithdrawal(input, user, cfg, rates);
 }
 
-/** Shared tail of requestWithdrawal for a resolved user row (Firestore or Supabase). */
+/** Shared tail of requestWithdrawal for a resolved user row. */
 async function finishRequestWithdrawal(
   input: WithdrawRequestInput,
   user: Record<string, unknown>,
@@ -240,9 +219,9 @@ async function finishRequestWithdrawal(
     );
   }
 
-  const createdAt = iso(user.createdAt);
-  if (createdAt) {
-    const ageHours = (Date.now() - Date.parse(createdAt)) / 3_600_000;
+  const createdAtIso = iso(user.createdAt) ?? new Date().toISOString();
+  if (createdAtIso) {
+    const ageHours = (Date.now() - Date.parse(createdAtIso)) / 3_600_000;
     if (ageHours < cfg.minAccountAgeHours) {
       throw badRequest(
         `New accounts can withdraw after ${cfg.minAccountAgeHours} hours. ${Math.ceil(cfg.minAccountAgeHours - ageHours)}h to go.`,
@@ -265,19 +244,12 @@ async function finishRequestWithdrawal(
   todayStart.setUTCHours(0, 0, 0, 0);
   const todayEnd = new Date(todayStart);
   todayEnd.setUTCDate(todayEnd.getUTCDate() + 1);
-  let todayCount = 0;
-  if (isSupabaseBackend) {
-    const { supabaseCountWithdrawalsToday } = await import('./data-supabase');
-    todayCount = await supabaseCountWithdrawalsToday(input.uid, todayStart.toISOString(), todayEnd.toISOString());
-  } else {
-    const snap = await db()
-      .collection('withdrawals')
-      .where('uid', '==', input.uid)
-      .where('createdAt', '>=', todayStart)
-      .count()
-      .get();
-    todayCount = int(snap.data().count);
-  }
+  const { supabaseCountWithdrawalsToday } = await import('./data-supabase');
+  const todayCount = await supabaseCountWithdrawalsToday(
+    input.uid,
+    todayStart.toISOString(),
+    todayEnd.toISOString(),
+  );
   if (todayCount >= cfg.dailyCount) {
     throw conflict(`Daily withdrawal limit reached (${cfg.dailyCount}). Resets at 00:00 UTC.`, 'daily_cap');
   }
@@ -314,11 +286,11 @@ async function finishRequestWithdrawal(
   });
 
   const status: WithdrawalStatus = heldForReview ? 'HeldForReview' : 'Pending';
+  const nowIso = new Date().toISOString();
   const doc = {
     uid: input.uid,
     username: str(user.username, 'member'),
     countryCode: str(user.countryCode, 'XX'),
-    email: str(user.email),
     coin: input.coin,
     rail: input.rail,
     network: quote.network,
@@ -329,7 +301,7 @@ async function finishRequestWithdrawal(
     tokenCost: quote.tokenCost,
     quotedUsdPerUnit: String(rates.spot[input.coin] ?? 0),
     usdValue: quote.usdValue,
-    quotedAt: new Date(quote.quotedAt),
+    quotedAt: quote.quotedAt,
     clientRequestId: input.clientRequestId,
     status,
     txid: null,
@@ -338,41 +310,38 @@ async function finishRequestWithdrawal(
     failureReason: null,
     reviewedBy: null,
     ip: input.ip,
-    createdAt: now(),
-    updatedAt: now(),
+    createdAt: nowIso,
+    updatedAt: nowIso,
   };
 
   try {
-    if (isSupabaseBackend) {
-      const { supabaseInsertWithdrawal } = await import('./data-supabase');
-      await supabaseInsertWithdrawal({
-        id: withdrawalId,
-        user_id: input.uid,
-        username: str(user.username, 'member'),
-        country_code: str(user.countryCode, 'XX'),
-        email: str(user.email),
-        coin: input.coin,
-        rail: input.rail,
-        network: quote.network,
-        address,
-        amount: quote.amount,
-        fee: quote.fee,
-        receive_amount: quote.receiveAmount,
-        token_cost: quote.tokenCost,
-        quoted_usd_per_unit: String(rates.spot[input.coin] ?? 0),
-        status,
-        txid: null,
-        batch_id: null,
-        processed_at: null,
-        failure_reason: null,
-        reviewed_by: null,
-        client_request_id: input.clientRequestId,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
-    } else {
-      await db().doc(`withdrawals/${withdrawalId}`).create(doc);
-    }
+    const { supabaseInsertWithdrawal } = await import('./data-supabase');
+    await supabaseInsertWithdrawal({
+      id: withdrawalId,
+      user_id: input.uid,
+      username: str(user.username, 'member'),
+      country_code: str(user.countryCode, 'XX'),
+      coin: input.coin,
+      rail: input.rail,
+      network: quote.network,
+      address,
+      amount: quote.amount,
+      fee: quote.fee,
+      receive_amount: quote.receiveAmount,
+      token_cost: quote.tokenCost,
+      quoted_usd_per_unit: String(rates.spot[input.coin] ?? 0),
+      usd_value: usdValue,
+      status,
+      txid: null,
+      batch_id: null,
+      processed_at: null,
+      failure_reason: null,
+      reviewed_by: null,
+      client_request_id: input.clientRequestId,
+      ip: input.ip,
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
   } catch (error) {
     await refundLocked(input.uid, quote.tokenCost, withdrawalId, 'Queue failed');
     throw error;
@@ -397,7 +366,7 @@ async function finishRequestWithdrawal(
     href: '/withdraw',
   });
 
-  return recordFrom(withdrawalId, { ...doc, createdAt: new Date() });
+  return recordFrom(withdrawalId, doc);
 }
 
 /** Return locked tokens to the spendable balance with a matching ledger row. */
@@ -407,36 +376,11 @@ export async function refundLocked(
   withdrawalId: string,
   reason: string,
 ): Promise<void> {
-  if (isSupabaseBackend) {
-    const { rpcRefund } = await import('./supabase');
-    await rpcRefund({ userUuid: uid, tokens, refId: withdrawalId, reason });
-    return;
+  const { rpcRefund } = await import('./supabase');
+  const res = await rpcRefund({ userUuid: uid, tokens, refId: withdrawalId, reason });
+  if (!res.ok) {
+    console.error(`[withdraw] refund of ${tokens} for ${withdrawalId} failed:`, res.error);
   }
-  await db().runTransaction(async (tx) => {
-    const ref = db().doc(`users/${uid}`);
-    const snap = await tx.get(ref);
-    if (!snap.exists) return;
-
-    tx.update(ref, {
-      balance: FieldValue.increment(tokens),
-      lockedBalance: FieldValue.increment(-tokens),
-      updatedAt: now(),
-    });
-
-    tx.set(db().doc(`users/${uid}/claims/wdref_${withdrawalId}`), {
-      source: 'refund',
-      amount: tokens,
-      baseAmount: tokens,
-      exp: 0,
-      refId: withdrawalId,
-      label: `Withdrawal refunded — ${reason}`,
-      bonusBps: 0,
-      ip: null,
-      day: new Date().toISOString().slice(0, 10),
-      createdAt: now(),
-      updatedAt: now(),
-    });
-  });
 }
 
 /* ---- READ ---------------------------------------------------------------- */
@@ -480,69 +424,39 @@ function rowToWithdrawalDoc(row: Record<string, unknown>): Record<string, unknow
 }
 
 export async function listWithdrawals(uid: string, limit = 25): Promise<WithdrawalRecord[]> {
-  if (isSupabaseBackend) {
-    const { supabaseListWithdrawals } = await import('./data-supabase');
-    const rows = await supabaseListWithdrawals(uid, limit);
-    return rows.map((d) => ({
-      id: String(d.id ?? ''),
-      coin: (String(d.coin ?? 'USDT') as CoinTicker),
-      rail: (String(d.rail ?? 'FaucetPay') as PayoutRailName),
-      network: String(d.network ?? ''),
-      address: String(d.address ?? ''),
-      amount: String(d.amount ?? '0'),
-      fee: String(d.fee ?? '0'),
-      receiveAmount: String(d.receive_amount ?? d.amount ?? '0'),
-      tokenCost: Number(d.token_cost ?? 0),
-      status: (String(d.status ?? 'Pending') as WithdrawalStatus),
-      txid: d.txid ? String(d.txid) : null,
-      at: d.created_at ? new Date(d.created_at as string).toISOString() : new Date().toISOString(),
-      processedAt: d.processed_at ? new Date(d.processed_at as string).toISOString() : null,
-      failureReason: d.failure_reason ? String(d.failure_reason) : null,
-    }));
-  }
-  if (!isServerFirebaseReady()) return [];
-  const snap = await db()
-    .collection('withdrawals')
-    .where('uid', '==', uid)
-    .orderBy('createdAt', 'desc')
-    .limit(limit)
-    .get();
-  return snap.docs.map((doc) => recordFrom(doc.id, doc.data() as Record<string, unknown>));
+  const { supabaseListWithdrawals } = await import('./data-supabase');
+  const rows = await supabaseListWithdrawals(uid, limit);
+  return rows.map((d) => ({
+    id: String(d.id ?? ''),
+    coin: (String(d.coin ?? 'USDT') as CoinTicker),
+    rail: (String(d.rail ?? 'FaucetPay') as PayoutRailName),
+    network: String(d.network ?? ''),
+    address: String(d.address ?? ''),
+    amount: String(d.amount ?? '0'),
+    fee: String(d.fee ?? '0'),
+    receiveAmount: String(d.receive_amount ?? d.amount ?? '0'),
+    tokenCost: Number(d.token_cost ?? 0),
+    status: (String(d.status ?? 'Pending') as WithdrawalStatus),
+    txid: d.txid ? String(d.txid) : null,
+    at: d.created_at ? new Date(d.created_at as string).toISOString() : new Date().toISOString(),
+    processedAt: d.processed_at ? new Date(d.processed_at as string).toISOString() : null,
+    failureReason: d.failure_reason ? String(d.failure_reason) : null,
+  }));
 }
 
 /* ---- SAVED ADDRESSES ----------------------------------------------------- */
 
 export async function listAddresses(uid: string): Promise<SavedAddress[]> {
-  if (isSupabaseBackend) {
-    const { supabaseListAddresses } = await import('./data-supabase');
-    const rows = await supabaseListAddresses(uid);
-    return rows.map((d) => ({
-      id: String(d.id ?? ''),
-      label: String(d.label ?? 'Saved address'),
-      address: String(d.address ?? ''),
-      coin: (String(d.coin ?? 'USDT') as CoinTicker),
-      rail: (String(d.rail ?? 'FaucetPay') as PayoutRailName),
-      lastUsedAt: d.last_used_at ? new Date(d.last_used_at as string).toISOString() : null,
-    }));
-  }
-  if (!isServerFirebaseReady()) return [];
-  const snap = await db()
-    .collection(`users/${uid}/addresses`)
-    .orderBy('createdAt', 'desc')
-    .limit(20)
-    .get();
-
-  return snap.docs.map((doc) => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      label: str(data.label, 'Saved address'),
-      address: str(data.address),
-      coin: (str(data.coin, 'USDT') as CoinTicker),
-      rail: (str(data.rail, 'FaucetPay') as PayoutRailName),
-      lastUsedAt: iso(data.lastUsedAt),
-    };
-  });
+  const { supabaseListAddresses } = await import('./data-supabase');
+  const rows = await supabaseListAddresses(uid);
+  return rows.map((d) => ({
+    id: String(d.id ?? ''),
+    label: String(d.label ?? 'Saved address'),
+    address: String(d.address ?? ''),
+    coin: (String(d.coin ?? 'USDT') as CoinTicker),
+    rail: (String(d.rail ?? 'FaucetPay') as PayoutRailName),
+    lastUsedAt: d.last_used_at ? new Date(d.last_used_at as string).toISOString() : null,
+  }));
 }
 
 export async function saveAddress(
@@ -552,42 +466,23 @@ export async function saveAddress(
   /* Keyed on the address so saving the same one twice updates rather than
      duplicating the list. */
   const id = Buffer.from(`${input.coin}:${input.address}`).toString('base64url').slice(0, 60);
-  if (isSupabaseBackend) {
-    const { getServerSupabase } = await import('./supabase');
-    await getServerSupabase().from('saved_addresses').upsert(
-      {
-        id,
-        user_id: uid,
-        label: input.label,
-        address: input.address,
-        coin: input.coin,
-        rail: input.rail,
-        last_used_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'id' },
-    );
-    return;
-  }
-  await db().doc(`users/${uid}/addresses/${id}`).set(
+  const { getServerSupabase } = await import('./supabase');
+  await getServerSupabase().from('saved_addresses').upsert(
     {
+      id,
+      user_id: uid,
       label: input.label,
       address: input.address,
       coin: input.coin,
       rail: input.rail,
-      lastUsedAt: now(),
-      createdAt: now(),
-      updatedAt: now(),
+      last_used_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     },
-    { merge: true },
+    { onConflict: 'id' },
   );
 }
 
 export async function deleteAddress(uid: string, id: string): Promise<void> {
-  if (isSupabaseBackend) {
-    const { getServerSupabase } = await import('./supabase');
-    await getServerSupabase().from('saved_addresses').delete().eq('id', id).eq('user_id', uid);
-    return;
-  }
-  await db().doc(`users/${uid}/addresses/${id}`).delete();
+  const { getServerSupabase } = await import('./supabase');
+  await getServerSupabase().from('saved_addresses').delete().eq('id', id).eq('user_id', uid);
 }

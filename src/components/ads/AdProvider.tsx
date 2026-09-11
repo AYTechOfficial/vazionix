@@ -17,10 +17,10 @@ import { PLACEMENTS, type PlacementId } from '@/lib/ads/placements';
    ----------------------------------------------------------------------------
    Owns three things no individual slot can own:
 
-   1. THE UNIT MAP. One Firestore read of /adUnits at mount, cached for the tab.
+   1. THE UNIT MAP. One read of the ad_units config at mount, cached for the tab.
       Without this, a page with nine slots issues nine reads on every
       navigation — at this product's traffic that is the largest single line on
-      the Firestore bill.
+      the fetch.
 
    2. FREQUENCY STATE. Impression counts and popunder/interstitial fire history
       live here, in module scope, so they survive client-side navigation for the

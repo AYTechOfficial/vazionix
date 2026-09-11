@@ -7,7 +7,7 @@ import { ButtonLink } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { BrandLock } from '@/components/brand/BrandMark';
 import { requireUser } from '@/server/session';
-import { db, iso, isServerFirebaseReady, str } from '@/server/db';
+import { iso, str } from '@/server/db';
 
 export const metadata: Metadata = { title: 'Account suspended' };
 export const dynamic = 'force-dynamic';
@@ -30,12 +30,15 @@ export default async function SuspendedPage() {
   let reason = 'This account is suspended.';
   let until: string | null = null;
 
-  if (isServerFirebaseReady()) {
-    const snap = await db().doc(`users/${claims.uid}`).get();
-    if (snap.exists) {
-      reason = str(snap.get('suspendedReason'), reason);
-      until = iso(snap.get('suspendedUntil'));
+  try {
+    const { supabaseGetUser } = await import('@/server/data-supabase');
+    const row = await supabaseGetUser(claims.uid);
+    if (row) {
+      reason = str(row.suspended_reason, reason);
+      until = iso(row.suspended_until);
     }
+  } catch {
+    // A read failure falls through to the generic copy; the page must still render.
   }
 
   return (

@@ -11,10 +11,10 @@ import { PermissionDeniedError, requirePermission } from '@/lib/admin/guard';
    POST   /api/admin/ads/[placement]   save or update a unit
    DELETE /api/admin/ads/[placement]   unfill the slot
    ----------------------------------------------------------------------------
-   `/adUnits/{placementId}` is EXECUTABLE CONTENT: its `html` is injected into a
+   An `ad_units` row is EXECUTABLE CONTENT: its `html` is injected into a
    sandboxed iframe and its `src` is loaded as a script. That is why this route
-   requires `ads.inventory` and why firestore.rules denies client writes to the
-   collection outright — the only path to it is an authenticated staff request.
+   requires `ads.inventory` and why RLS denies client writes to the table
+   outright — the only path to it is an authenticated staff request.
 
    The placement id is validated against the placement map rather than accepted as
    free text. An arbitrary id would create a document no renderer reads, which

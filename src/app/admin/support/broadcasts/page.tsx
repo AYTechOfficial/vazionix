@@ -1,123 +1,109 @@
 import type { Metadata } from 'next';
 
-import { nf, relative } from '@/lib/format';
-import { requirePermission } from '@/lib/admin/guard';
-import { countWhere, listCatalogue } from '@/server/admin';
-import { getSiteConfig } from '@/server/config';
+import { nf } from '@/lib/format';
+import { allowFor, requirePermission } from '@/lib/admin/guard';
+import { listCatalogue } from '@/server/admin';
 import { ScaffoldPage } from '@/components/admin/ScaffoldPage';
-import { NotConfigured } from '@/components/admin/NotConfigured';
-import { Card, CardBody, CardHead, CardSub, CardTitle } from '@/components/ui/Card';
-import { ButtonLink } from '@/components/ui/Button';
+import { CatalogueEditor, type CatalogueField } from '@/components/admin/CatalogueEditor';
 
 export const metadata: Metadata = { title: 'Broadcasts' };
 
 /* ============================================================================
-   /admin/support/broadcasts — messaging every member at once
+   /admin/support/broadcasts — messages pushed to members
    ----------------------------------------------------------------------------
-   A broadcast is a fan-out write: one row per recipient in
-   `/users/{uid}/notifications`, batched, rate-limited, and resumable if it fails
-   halfway. At any real member count that is a Cloud Function with a queue, not a
-   Route Handler — a handler that tried it would exceed the request timeout partway
-   through and leave half the base notified with no record of where it stopped.
+   A broadcast is a row in the `broadcasts` table (migration 0020): title, body,
+   tone, audience, status. `status` is the whole lifecycle — a row stays a
+   `draft` until it is flipped to `sent`, at which point `sentAt` is stamped by
+   the upsert and the row is what the member-facing badge reads.
 
-   So there is no send button, and the honest alternative is already available: the
-   announcement banner in `/config/site` reaches every member on their next page load,
-   costs one document write, and can be taken down as fast as it went up. For anything
-   short of a legal notice it is the better tool anyway.
+   SENDING IS NOT AUTOMATIC — marking a row sent here records the message and
+   its timestamp; delivery is the notification fan-out in the support module,
+   which picks up `sent` rows. Compose carefully: a sent broadcast cannot be
+   unsent, only superseded.
    ========================================================================== */
 
 export const dynamic = 'force-dynamic';
 
-export default async function BroadcastsPage() {
-  await requirePermission('broadcast.send');
+const FIELDS: CatalogueField[] = [
+  {
+    key: 'title',
+    label: 'Title',
+    kind: 'text',
+    column: true,
+    required: true,
+    placeholder: 'Scheduled maintenance',
+  },
+  {
+    key: 'body',
+    label: 'Body',
+    kind: 'longtext',
+    required: true,
+    hint: 'Short, plain sentences. This text lands in the member notification feed.',
+  },
+  {
+    key: 'tone',
+    label: 'Tone',
+    kind: 'select',
+    column: true,
+    defaultValue: 'info',
+    options: [
+      { value: 'info', label: 'Info' },
+      { value: 'success', label: 'Success' },
+      { value: 'warning', label: 'Warning' },
+      { value: 'danger', label: 'Danger' },
+    ],
+  },
+  {
+    key: 'audience',
+    label: 'Audience',
+    kind: 'select',
+    column: true,
+    defaultValue: 'all',
+    options: [
+      { value: 'all', label: 'All members' },
+      { value: 'verified', label: 'Verified members' },
+      { value: 'suspended', label: 'Suspended members' },
+    ],
+  },
+  {
+    key: 'status',
+    label: 'Status',
+    kind: 'select',
+    column: true,
+    defaultValue: 'draft',
+    options: [
+      { value: 'draft', label: 'Draft' },
+      { value: 'sent', label: 'Sent' },
+    ],
+    hint: 'Sent stamps sentAt and queues the fan-out. Cannot be unsent — edit only drafts.',
+  },
+];
 
-  const [rows, site, members] = await Promise.all([
-    listCatalogue('broadcasts', 50),
-    getSiteConfig(),
-    countWhere('users'),
-  ]);
+export default async function BroadcastsPage() {
+  const session = await requirePermission('broadcast.send');
+  const allow = allowFor(session);
+  const rows = await listCatalogue('broadcasts', 100);
+
+  const drafts = rows.filter((r) => (r.fields.status as string) !== 'sent');
 
   return (
     <ScaffoldPage
       perm="broadcast.send"
       title="Broadcasts"
-      sub="Not wired — the announcement banner does the same job for less risk"
+      sub="Messages pushed to member notification feeds"
       kpis={[
-        { label: 'Recorded broadcasts', value: nf(rows.length), sub: 'documents in /broadcasts' },
-        { label: 'Recipients per send', value: nf(members), sub: 'one notification write each' },
-        {
-          label: 'Banner',
-          value: site.announcement ? 'Live' : 'Off',
-          sub: site.announcement ? `tone: ${site.announcementTone}` : 'nothing showing',
-          tone: site.announcement ? 'success' : 'default',
-        },
+        { label: 'All broadcasts', value: nf(rows.length), sub: 'rows in the broadcasts table' },
+        { label: 'Drafts', value: nf(drafts.length), sub: 'not yet visible to members' },
       ]}
-      actions={
-        <ButtonLink href="/admin/support/banners" variant="primary">
-          Use the announcement banner
-        </ButtonLink>
-      }
     >
-      {rows.length ? (
-        <Card as="section">
-          <CardHead>
-            <div>
-              <CardTitle>Recorded broadcasts</CardTitle>
-              <CardSub>Read-only</CardSub>
-            </div>
-          </CardHead>
-          <div className="w-full overflow-auto">
-            <table className="vf-table">
-              <caption className="sr-only">Recorded broadcasts</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Id</th>
-                  <th scope="col">Subject</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id}>
-                    <td className="font-mono text-12">{row.id}</td>
-                    <td className="text-text-2">{String(row.fields['subject'] ?? '—')}</td>
-                    <td className="text-text-3">{String(row.fields['status'] ?? '—')}</td>
-                    <td className="text-text-3">{relative(row.updatedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      ) : (
-        <NotConfigured
-          what="Broadcasts"
-          collection="/broadcasts"
-          how="Nothing writes this collection. A real broadcast is a queued fan-out — one notification document per member — which belongs to a Cloud Function that can batch, rate-limit and resume, not to a page request that would time out partway through."
-        />
-      )}
-
-      <Card as="section">
-        <CardHead>
-          <div>
-            <CardTitle>Why the banner is usually right</CardTitle>
-            <CardSub>Same reach, one write, instantly reversible</CardSub>
-          </div>
-        </CardHead>
-        <CardBody className="text-13 leading-body text-text-3">
-          <p>
-            The announcement in <code className="font-mono text-12">/config/site</code> is read on every request,
-            so every member sees it on their next page load. It costs one document write regardless of member
-            count, and removing it is another — where {nf(members)} notification rows cannot be unsent.
-          </p>
-          <p className="mt-2">
-            The case for a real broadcast is a message that must survive being missed: a payout delay, a policy
-            change, an incident. That is exactly the case that needs the queue and the delivery record, which is
-            why it is a Function rather than a shortcut here.
-          </p>
-        </CardBody>
-      </Card>
+      <CatalogueEditor
+        collection="broadcasts"
+        noun="Broadcast"
+        fields={FIELDS}
+        rows={rows}
+        canEdit={allow('broadcast.send')}
+        titleKey="title"
+      />
     </ScaffoldPage>
   );
 }

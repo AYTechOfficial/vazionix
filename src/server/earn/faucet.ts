@@ -5,18 +5,17 @@ import { faucetExpRange, rollFaucetExp } from '@/lib/config/economy';
 
 import { assertCaptcha } from '../captcha';
 import { getEconomy, getSiteConfig } from '../config';
-import { AppError, db, int, iso, now, tooMany } from '../db';
-import { isSupabaseBackend } from '@/lib/backend';
-import { supabaseGetCooldown, supabaseSetCooldown } from '../data-supabase';
+import { AppError, int, tooMany } from '../db';
+import { supabaseGetCooldown, supabaseGetUser, supabaseSetCooldown } from '../data-supabase';
 import { countToday, credit, type CreditResult } from '../ledger';
 
 /* ============================================================================
    FAUCET
    ----------------------------------------------------------------------------
-   The cooldown is server state, in `/users/{uid}/cooldowns/faucet`, and it is
-   written in the same transaction as the credit. A client-side timer is a
-   display of that state, never the authority for it — a faucet whose cooldown
-   lives in localStorage pays out on every hard refresh.
+   The cooldown is server state, in the `user_cooldowns` row keyed
+   `(uid, 'faucet')`, and it is written with the credit in the same request. A
+   client-side timer is a display of that state, never the authority for it —
+   a faucet whose cooldown lives in localStorage pays out on every hard refresh.
 
    THE IDEMPOTENCY KEY IS THE COOLDOWN WINDOW
    `faucet:{floor(now / cooldown)}` means two requests inside one window resolve
@@ -24,8 +23,6 @@ import { countToday, credit, type CreditResult } from '../ledger';
    also means the cooldown and the replay guard cannot disagree: they are derived
    from the same number.
    ========================================================================== */
-
-const COOLDOWN_DOC = (uid: string) => db().doc(`users/${uid}/cooldowns/faucet`);
 
 interface HappyHour {
   active: boolean;
@@ -64,12 +61,7 @@ export async function getFaucetState(uid: string): Promise<FaucetState> {
   const economy = await getEconomy();
   const cfg = economy.faucet;
 
-  const cooldown = isSupabaseBackend
-    ? await supabaseGetCooldown(uid, 'faucet')
-    : await (async () => {
-        const snap = await COOLDOWN_DOC(uid).get();
-        return { nextAt: snap.exists ? iso(snap.get('nextAt')) : null, claims: int(snap.get('claims')) };
-      })();
+  const cooldown = await supabaseGetCooldown(uid, 'faucet');
   const claimsToday = await countToday(uid, 'faucet');
 
   /* The EXP band comes from LIFETIME claims, so it does not reset at midnight
@@ -103,14 +95,8 @@ export async function getFaucetState(uid: string): Promise<FaucetState> {
     cooldown row's running counter when the profile has no counter yet. */
 async function faucetLifetimeClaims(uid: string, cooldownClaims: number): Promise<number> {
   try {
-    if (isSupabaseBackend) {
-      const { supabaseGetUser } = await import('../data-supabase');
-      const row = await supabaseGetUser(uid);
-      const counts = (row?.claim_counts ?? {}) as Record<string, unknown>;
-      return int(counts.faucet, cooldownClaims);
-    }
-    const snap = await db().doc(`users/${uid}`).get();
-    const counts = (snap.get('claimCounts') ?? {}) as Record<string, unknown>;
+    const row = await supabaseGetUser(uid);
+    const counts = (row?.claim_counts ?? {}) as Record<string, unknown>;
     return int(counts.faucet, cooldownClaims);
   } catch {
     return cooldownClaims;
@@ -136,12 +122,7 @@ export async function claimFaucet(args: {
 
   if (cfg.requireCaptcha) await assertCaptcha(args.captchaToken, 'faucet', args.ip);
 
-  const cooldown = isSupabaseBackend
-    ? await supabaseGetCooldown(args.uid, 'faucet')
-    : await (async () => {
-        const snap = await COOLDOWN_DOC(args.uid).get();
-        return { nextAt: snap.exists ? iso(snap.get('nextAt')) : null, claims: int(snap.get('claims')) };
-      })();
+  const cooldown = await supabaseGetCooldown(args.uid, 'faucet');
   const nextMs = cooldown.nextAt ? Date.parse(cooldown.nextAt) : 0;
 
   if (nextMs > Date.now()) {
@@ -187,18 +168,11 @@ export async function claimFaucet(args: {
   });
 
   const nextAt = new Date(Date.now() + cfg.cooldownSeconds * 1000);
-  if (isSupabaseBackend) {
-    await supabaseSetCooldown(args.uid, 'faucet', {
-      nextAt,
-      lastClaimAt: new Date(),
-      claims: cooldown.claims + 1,
-    });
-  } else {
-    await COOLDOWN_DOC(args.uid).set(
-      { nextAt, lastClaimAt: now(), claims: cooldown.claims + 1, updatedAt: now() },
-      { merge: true },
-    );
-  }
+  await supabaseSetCooldown(args.uid, 'faucet', {
+    nextAt,
+    lastClaimAt: new Date(),
+    claims: cooldown.claims + 1,
+  });
 
   return { ...result, nextClaimAt: nextAt.toISOString(), happyHour: hh.active };
 }

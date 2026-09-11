@@ -548,7 +548,7 @@ function UnitForm({
 
       <div className="rounded-sm border border-line bg-surface-2 p-3 text-12 leading-body text-text-3">
         <p>
-          Resolution order is Firestore, then environment, then the committed fallback. To freeze this unit
+          Resolution order is the ad_units table, then environment, then the committed fallback. To freeze this unit
           into a build instead, set{' '}
           <code className="font-mono text-11 text-text-2">{envKeyFor(row.placement)}</code> and leave the
           document empty.

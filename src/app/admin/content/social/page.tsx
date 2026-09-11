@@ -13,7 +13,7 @@ export const metadata: Metadata = { title: 'Social links' };
    ----------------------------------------------------------------------------
    These are environment variables read through `src/lib/brand.ts`, not database
    records, and that is deliberate: a social URL appears in the footer of every page,
-   so resolving it from a document would add a Firestore read to every render for a
+   so resolving it from the database would add a read to every render for a
    value that changes once a year.
 
    The consequence is that editing them is a deploy-time change, and this screen says

@@ -80,7 +80,7 @@ export default async function SeoPage() {
         <CardBody className="border-t border-line text-12 leading-body text-text-3">
           Per-page titles come from each route&apos;s own <code className="font-mono">metadata</code> export.
           Changing one is a code edit and a deploy, which for a title is the right trade — a metadata document
-          read on every render would add a Firestore read to every page in the product.
+          read on every render would add a database read to every page in the product.
         </CardBody>
       </Card>
 

@@ -6,7 +6,7 @@ import { createClient } from '@supabase/supabase-js';
    SUPABASE SERVER CLIENT
    ----------------------------------------------------------------------------
    Server-side Supabase access. Uses the service_role key, which FULLY BYPASSES
-   RLS — exactly like the Firebase Admin SDK bypasses firestore.rules today.
+   RLS — every row policy below assumes that and guards the code paths instead.
 
    SECURITY: this key must NEVER carry a NEXT_PUBLIC_ prefix (it would ship to
    the browser bundle). It lives only in src/server and Edge Functions.
@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
 
-/** True when Supabase credentials are present (mirrors isServerFirebaseReady). */
+/** True when Supabase credentials are present. */
 export function isServerSupabaseReady(): boolean {
   return Boolean(url && serviceRoleKey && serviceRoleKey !== 'service_role <paste-your-service-role-jwt-here>');
 }
@@ -36,7 +36,9 @@ export function getServerSupabase() {
 /* ---- LEDGER RPC BRIDGE -------------------------------------------------- */
 /* The money path lives in Postgres functions (public.credit / public.debit)
    so the invariant is DB-enforced. These wrappers return the SAME shape the
-   app's in-process ledger produced, so callers can switch with minimal churn. */
+   app's in-process ledger produced, so callers can switch with minimal churn.
+   The SQL functions return BOTH snake_case and camelCase keys (migration
+   0019); the interfaces carry both and the app reads camelCase. */
 
 export interface CreditRpcResult {
   ok: boolean;
@@ -44,15 +46,20 @@ export interface CreditRpcResult {
   message?: string;
   credited?: number;
   bonusBps?: number;
+  bonus_bps?: number;
   exp?: number;
   balance?: number;
   level?: number;
   levelUp?: boolean;
-  claimId?: string;
+  level_up?: boolean;
+  claimId?: number | string;
+  claim_id?: number | string;
   replayed?: boolean;
-  referrerUid?: string;
+  referrerUid?: string | null;
+  referrer_uid?: string | null;
   commission?: number;
-  refRefId?: string;
+  refRefId?: string | null;
+  ref_ref_id?: string | null;
 }
 
 export async function rpcCredit(input: {
@@ -95,7 +102,8 @@ export interface DebitRpcResult {
   message?: string;
   debited?: number;
   balance?: number;
-  claimId?: string;
+  claimId?: number | string;
+  claim_id?: number | string;
   replayed?: boolean;
 }
 
@@ -129,7 +137,8 @@ export interface RefundRpcResult {
   error?: string;
   message?: string;
   balance?: number;
-  claimId?: string;
+  claimId?: number | string;
+  claim_id?: number | string;
 }
 
 export async function rpcRefund(input: {
@@ -149,4 +158,65 @@ export async function rpcRefund(input: {
     return { ok: false, error: error.message, message: error.message };
   }
   return data as RefundRpcResult;
+}
+
+/* ---- STATS RPC ----------------------------------------------------------- */
+/* public.bump_stats() (0019) upserts the 'global' lifetime row and today's row
+   in one call, DB-enforced so two concurrent claims cannot lose an increment
+   the way a read-modify-write in JS would. */
+
+export async function rpcBumpStats(patch: {
+  members?: number;
+  membersToday?: number;
+  claims?: number;
+  tokensCredited?: number;
+  withdrawals?: number;
+  tokensWithdrawn?: number;
+  usdWithdrawn?: number;
+  ptcViews?: number;
+  shortlinkClaims?: number;
+  offerwallConversions?: number;
+  adImpressions?: number;
+}): Promise<void> {
+  const supabase = getServerSupabase();
+  const { error } = await supabase.rpc('bump_stats', {
+    p_members: patch.members ?? 0,
+    p_members_today: patch.membersToday ?? 0,
+    p_claims: patch.claims ?? 0,
+    p_tokens_credited: patch.tokensCredited ?? 0,
+    p_withdrawals: patch.withdrawals ?? 0,
+    p_tokens_withdrawn: patch.tokensWithdrawn ?? 0,
+    p_usd_withdrawn: patch.usdWithdrawn ?? 0,
+    p_ptc_views: patch.ptcViews ?? 0,
+    p_shortlink_claims: patch.shortlinkClaims ?? 0,
+    p_offerwall_conversions: patch.offerwallConversions ?? 0,
+    p_ad_impressions: patch.adImpressions ?? 0,
+  });
+  if (error) throw new Error(`[stats] bump_stats failed: ${error.message}`);
+}
+
+/* ---- WITHDRAWAL STATUS RPC ------------------------------------------------ */
+/* public.set_withdrawal_status() (0019) performs the console's status transition
+   under a row lock, including the locked-balance release on Completion, so two
+   operators clicking at once cannot both act. */
+
+export async function rpcSetWithdrawalStatus(input: {
+  id: string;
+  status: string;
+  actor: string;
+  txid?: string | null;
+  failure?: string | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  const supabase = getServerSupabase();
+  const { data, error } = await supabase.rpc('set_withdrawal_status', {
+    p_id: input.id,
+    p_status: input.status,
+    p_actor: input.actor,
+    p_txid: input.txid ?? null,
+    p_failure: input.failure ?? null,
+  });
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+  return (data ?? { ok: false, error: 'no_result' }) as { ok: boolean; error?: string };
 }

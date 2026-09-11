@@ -13,27 +13,29 @@ import type { CoinTicker, PayoutRail } from '@/lib/models';
 import { DEFAULT_AD_BEHAVIOUR, type AdBehaviourConfig, type AdUnitConfig } from '@/lib/ads/config';
 import type { PlacementId } from '@/lib/ads/placements';
 
-import { db, iso, isServerFirebaseReady } from './db';
-import { isSupabaseBackend } from '@/lib/backend';
+import { iso } from './db';
 import { supabaseGetConfig, supabaseGetAdUnits } from './data-supabase';
 
 /* ============================================================================
    CONFIGURATION READS
    ----------------------------------------------------------------------------
-   Four documents drive the whole product:
+   Four sections drive the whole product, all stored in the `config` table as
+   JSON values keyed by their section name:
 
-     /config/economy   rewards, cooldowns, caps, tiers, levels
-     /config/rates     usdPerToken, spot prices, payout rails
-     /config/ads       master ad switches and exemptions
-     /adUnits/{id}     one document per filled ad placement
+     economy   rewards, cooldowns, caps, tiers, levels
+     rates     usdPerToken, spot prices, payout rails
+     ads       master ad switches and exemptions
+     site      maintenance and feature flags
 
-   All four are optional. A missing document means "use the shipped defaults",
-   which is what lets a brand-new Firebase project serve a working site before
+   plus one row per filled ad placement in the `ad_units` table.
+
+   All of them are optional. A missing row means "use the shipped defaults",
+   which is what lets a brand-new Supabase project serve a working site before
    anyone opens the admin console.
 
-   `cache()` is React's per-request memo. A page that reads the economy config in
-   four different components issues one Firestore read, not four — and the value
-   cannot change mid-render, so two components never disagree.
+   `cache()` is React's per-request memo. A page that reads the economy config
+   in four different components issues one database read, not four — and the
+   value cannot change mid-render, so two components never disagree.
    ========================================================================== */
 
 /** Deep merge that only overrides keys actually present in `patch`. */
@@ -59,21 +61,12 @@ function merge<T>(base: T, patch: unknown): T {
 }
 
 async function readDoc(path: string): Promise<Record<string, unknown> | null> {
-  /* Supabase: config documents live in the `config` table, keyed by the path
-     (e.g. 'economy'). Fetch the JSON value directly. */
-  if (isSupabaseBackend) {
-    try {
-      return await supabaseGetConfig(path);
-    } catch (error) {
-      console.error(`[config] supabase read failed for ${path}`, error);
-      return null;
-    }
-  }
-
-  if (!isServerFirebaseReady()) return null;
+  /* Config documents live in the `config` table, keyed by the section after the
+     'config/' prefix (e.g. 'config/economy' -> 'economy'). The value is the JSON
+     the admin console deep-merges its patches into. */
+  const section = path.replace(/^config\//, '');
   try {
-    const snap = await db().doc(path).get();
-    return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+    return await supabaseGetConfig(section);
   } catch (error) {
     // A config read must never take a page down. Log and fall back to defaults;
     // the site runs on shipped values instead of 500ing.
@@ -137,9 +130,14 @@ export interface AdRuntimeConfig {
 /**
  * The ad map, read once per request and handed to `AdProvider`.
  *
- * One read of the whole /adUnits collection rather than one per placement: a
- * dense page mounts a dozen slots, and twelve document reads per navigation is
- * the single largest avoidable line on a Firestore bill at faucet traffic.
+ * One read of the whole `ad_units` table rather than one per placement: a dense
+ * page mounts a dozen slots, and a dozen round-trips per navigation is the
+ * single largest avoidable latency cost at faucet traffic.
+ *
+ * Each row keeps its scalar fields in dedicated columns (kind, src, html,
+ * network, cap_per_session, enabled) and parks the rest of the editor payload
+ * (format, containerId, url, geo) in a `json` text column — written by
+ * saveAdUnit as a JSON.stringify'd object, parsed back here.
  */
 export const getAdConfig = cache(async (): Promise<AdRuntimeConfig> => {
   const behaviourDoc = await readDoc('config/ads');
@@ -147,47 +145,41 @@ export const getAdConfig = cache(async (): Promise<AdRuntimeConfig> => {
 
   const units: Record<string, AdUnitConfig> = {};
 
-  if (isSupabaseBackend) {
-    try {
-      const rows = await supabaseGetAdUnits();
-      for (const row of rows) {
-        const placement = String(row.placement_id ?? '');
-        if (!placement) continue;
-        units[placement] = {
-          placement: placement as PlacementId,
-          kind: (row.kind as AdUnitConfig['kind']) ?? 'html',
-          enabled: row.enabled !== false,
-          ...(row.html ? { html: String(row.html) } : {}),
-          ...(row.src ? { src: String(row.src) } : {}),
-          ...(row.network ? { network: String(row.network) } : {}),
-          ...(row.cap_per_session ? { capPerSession: Number(row.cap_per_session) } : {}),
-        };
+  try {
+    const rows = await supabaseGetAdUnits();
+    for (const row of rows) {
+      const placement = String(row.placement_id ?? '');
+      if (!placement) continue;
+
+      /* The editor's extra fields ride in the json text column; anything it
+         fails to parse is treated as absent rather than failing the whole map. */
+      let extras: Record<string, unknown> = {};
+      try {
+        const raw = row.json ? String(row.json) : '';
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          extras = parsed as Record<string, unknown>;
+        }
+      } catch {
+        console.error(`[config] ad_units json parse failed for ${placement}`);
       }
-    } catch (error) {
-      console.error('[config] supabase adUnits read failed', error);
+
+      units[placement] = {
+        placement: placement as PlacementId,
+        kind: (row.kind as AdUnitConfig['kind']) ?? 'html',
+        enabled: row.enabled !== false,
+        ...(row.html ? { html: String(row.html) } : {}),
+        ...(row.src ? { src: String(row.src) } : {}),
+        ...(row.network ? { network: String(row.network) } : {}),
+        ...(row.cap_per_session ? { capPerSession: Number(row.cap_per_session) } : {}),
+        ...(extras.format ? { format: extras.format as AdUnitConfig['format'] } : {}),
+        ...(extras.containerId ? { containerId: String(extras.containerId) } : {}),
+        ...(extras.url ? { url: String(extras.url) } : {}),
+        ...(Array.isArray(extras.geo) ? { geo: extras.geo as string[] } : {}),
+      };
     }
-  } else if (isServerFirebaseReady()) {
-    try {
-      const snap = await db().collection('adUnits').get();
-      for (const doc of snap.docs) {
-        const data = doc.data() as Partial<AdUnitConfig>;
-        units[doc.id] = {
-          placement: doc.id as PlacementId,
-          kind: data.kind ?? 'html',
-          enabled: data.enabled !== false,
-          ...(data.format ? { format: data.format } : {}),
-          ...(data.html ? { html: data.html } : {}),
-          ...(data.src ? { src: data.src } : {}),
-          ...(data.containerId ? { containerId: data.containerId } : {}),
-          ...(data.url ? { url: data.url } : {}),
-          ...(data.network ? { network: data.network } : {}),
-          ...(data.capPerSession ? { capPerSession: data.capPerSession } : {}),
-          ...(data.geo ? { geo: data.geo } : {}),
-        };
-      }
-    } catch (error) {
-      console.error('[config] adUnits read failed', error);
-    }
+  } catch (error) {
+    console.error('[config] adUnits read failed', error);
   }
 
   return { behaviour, units };

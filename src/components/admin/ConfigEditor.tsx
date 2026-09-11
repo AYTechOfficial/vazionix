@@ -16,7 +16,7 @@ import { useToast } from '@/components/ui/Toast';
    CONFIG EDITOR
    ----------------------------------------------------------------------------
    One form component behind every config screen, driven by a declarative field
-   list. Ten bespoke forms over the same four Firestore documents would be ten
+   list. Ten bespoke forms over the same four config rows would be ten
    places for a field name to drift from the server that reads it.
 
    FIELD PATHS ARE DOTTED
@@ -52,7 +52,7 @@ export interface ConfigEditorProps {
   title: string;
   sub?: string;
   fields: ConfigField[];
-  /** The current values, already resolved (defaults merged with Firestore). */
+  /** The current values, already resolved (defaults merged with the config rows). */
   values: Record<string, unknown>;
   /** Rendered under the fields — usually a note about blast radius. */
   footnote?: React.ReactNode;

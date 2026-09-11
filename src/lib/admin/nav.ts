@@ -1,10 +1,8 @@
 import {
   AlertTriangle,
   BarChart3,
-  Bot,
   Briefcase,
   Coins,
-  Download,
   Droplet,
   Gift,
   Globe,
@@ -20,8 +18,6 @@ import {
   Link2,
   Lock,
   Megaphone,
-  MessageSquare,
-  Monitor,
   PieChart,
   Receipt,
   RefreshCw,
@@ -95,8 +91,8 @@ export const ANAV: readonly AdminNavGroup[] = [
     group: 'People',
     items: [
       { id: 'users', label: 'Users', href: '/admin/users', icon: Users, perm: 'user.view' },
-      { id: 'kyc', label: 'KYC queue', href: '/admin/kyc', icon: ShieldCheck, perm: 'kyc.review', badge: 'kyc' },
-      { id: 'fraud', label: 'Fraud clusters', href: '/admin/fraud', icon: AlertTriangle, perm: 'fraud.review', badge: 'fraud' },
+      { id: 'kyc', label: 'Review queue', href: '/admin/kyc', icon: ShieldCheck, perm: 'kyc.review', badge: 'kyc' },
+      { id: 'fraud', label: 'Fraud & risk', href: '/admin/fraud', icon: AlertTriangle, perm: 'fraud.review', badge: 'fraud' },
       { id: 'requests', label: 'Change requests', href: '/admin/requests', icon: Inbox, perm: 'user.edit', badge: 'cr' },
     ],
   },
@@ -135,17 +131,13 @@ export const ANAV: readonly AdminNavGroup[] = [
       { id: 'revenue', label: 'Revenue', href: '/admin/ads/revenue', icon: BarChart3, perm: 'ads.view' },
       { id: 'advertisers', label: 'Advertisers', href: '/admin/ads/advertisers', icon: Landmark, perm: 'advertiser.manage' },
     ],
-  },
-  {
+  },  {
     group: 'Support',
     items: [
       { id: 'tickets', label: 'Ticket inbox', href: '/admin/support/tickets', icon: LifeBuoy, perm: 'support.view', badge: 'tk' },
-      { id: 'chats', label: 'Live chat queue', href: '/admin/support/chats', icon: MessageSquare, perm: 'support.view' },
-      { id: 'kb', label: 'AI knowledge base', href: '/admin/support/kb', icon: Bot, perm: 'kb.edit' },
       { id: 'agents', label: 'Agent performance', href: '/admin/support/agents', icon: Headphones, perm: 'support.assign' },
       { id: 'broadcast', label: 'Broadcasts', href: '/admin/support/broadcasts', icon: Send, perm: 'broadcast.send' },
       { id: 'banners', label: 'Site banners', href: '/admin/support/banners', icon: AlertTriangle, perm: 'content.edit' },
-      { id: 'emails', label: 'Email templates', href: '/admin/support/emails', icon: Inbox, perm: 'content.edit' },
     ],
   },
   {
@@ -175,14 +167,11 @@ export const ANAV: readonly AdminNavGroup[] = [
     items: [
       { id: 'p-staff', label: 'Admin staff', href: '/admin/platform/staff', icon: UserCog, perm: 'admin.view' },
       { id: 'p-roles', label: 'Roles & permissions', href: '/admin/platform/roles', icon: Lock, perm: 'roles.edit' },
-      { id: 'p-sessions', label: 'Sessions & IP', href: '/admin/platform/sessions', icon: Monitor, perm: 'admin.view' },
       { id: 'p-audit', label: 'Audit log', href: '/admin/platform/audit', icon: History, perm: 'audit.view' },
       { id: 'p-security', label: 'Security centre', href: '/admin/platform/security', icon: ShieldCheck, perm: 'audit.view' },
       { id: 'p-health', label: 'System health', href: '/admin/platform/health', icon: Zap, perm: 'system.view' },
       { id: 'p-keys', label: 'Keys & webhooks', href: '/admin/platform/keys', icon: KeyRound, perm: 'keys.manage' },
       { id: 'p-abuse', label: 'Anti-abuse', href: '/admin/platform/abuse', icon: ShieldCheck, perm: 'security.config' },
-      { id: 'p-backups', label: 'Backups & GDPR', href: '/admin/platform/backups', icon: Download, perm: 'backup.run' },
-      { id: 'p-changelog', label: 'Changelog', href: '/admin/platform/changelog', icon: History, perm: 'system.view' },
     ],
   },
 ];

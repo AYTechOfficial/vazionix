@@ -4,8 +4,8 @@ import { createHash } from 'node:crypto';
 
 import { CAPTCHA_PROVIDERS, captchaEnabled, captchaProvider } from '@/lib/captcha/config';
 
-import { AppError, db, isServerFirebaseReady, now } from './db';
-import { isSupabaseBackend } from '@/lib/backend';
+import { AppError } from './db';
+import { supabaseSpendCaptchaToken } from './data-supabase';
 
 /* ============================================================================
    CAPTCHA VERIFICATION (server)
@@ -16,16 +16,16 @@ import { isSupabaseBackend } from '@/lib/backend';
       secret key, which never leaves the server. A client cannot forge a
       provider's "yes".
 
-   2. SINGLE-USE. A verified token's hash is written to /captchaTokens/{hash}
-      with `create`, so presenting the same solved captcha twice fails on the
-      second attempt. Without this, one solve funds unlimited claims — which is
-      the actual exploit on most faucets, not captcha solving itself.
+   2. SINGLE-USE. A verified token's hash is written to `captcha_tokens` with a
+      primary key on the hash, so presenting the same solved captcha twice fails
+      on the second attempt. Without this, one solve funds unlimited claims —
+      which is the actual exploit on most faucets, not captcha solving itself.
 
    3. FAIL CLOSED. A provider outage refuses the claim rather than waving it
       through. An uncredited claim is a retry; a free claim is a drained faucet.
 
-   The token record carries a TTL field so a Firestore TTL policy on
-   `expiresAt` reclaims the collection automatically — see the deploy guide.
+   The token row carries an `expires_at` column so expired solves can be
+      reclaimed — see the deploy guide.
    ========================================================================== */
 
 const SECRET = (process.env.CAPTCHA_SECRET_KEY ?? '').trim();
@@ -128,44 +128,25 @@ export async function verifyCaptcha(
      a replay loses the insert race instead of being trusted. */
   const id = hash(`${action}:${token}`).slice(0, 60);
 
-  if (isSupabaseBackend) {
-    try {
-      const { supabaseSpendCaptchaToken } = await import('./data-supabase');
-      const fresh = await supabaseSpendCaptchaToken(id, new Date(Date.now() + TOKEN_TTL_MS));
-      if (!fresh) {
-        return {
-          ok: false,
-          provider: captchaProvider,
-          reason: 'That captcha was already used. Solve a new one.',
-        };
-      }
-    } catch (error) {
-      /* A failure to RECORD the token must not silently accept it: that would
-         turn one solve into unlimited claims, which is the whole attack this
-         guard exists to stop. */
-      console.error('[captcha] single-use record failed', error);
-      return {
-        ok: false,
-        provider: captchaProvider,
-        reason: 'Could not verify that captcha was unused. Try again.',
-      };
-    }
-  } else if (isServerFirebaseReady()) {
-    try {
-      await db().doc(`captchaTokens/${id}`).create({
-        action,
-        ip,
-        provider: captchaProvider,
-        createdAt: now(),
-        expiresAt: new Date(Date.now() + TOKEN_TTL_MS),
-      });
-    } catch {
+  try {
+    const fresh = await supabaseSpendCaptchaToken(id, new Date(Date.now() + TOKEN_TTL_MS));
+    if (!fresh) {
       return {
         ok: false,
         provider: captchaProvider,
         reason: 'That captcha was already used. Solve a new one.',
       };
     }
+  } catch (error) {
+    /* A failure to RECORD the token must not silently accept it: that would
+       turn one solve into unlimited claims, which is the whole attack this
+       guard exists to stop. */
+    console.error('[captcha] single-use record failed', error);
+    return {
+      ok: false,
+      provider: captchaProvider,
+      reason: 'Could not verify that captcha was unused. Try again.',
+    };
   }
 
   return { ok: true, provider: captchaProvider };

@@ -135,7 +135,7 @@ export default async function AdInventoryPage() {
         <CardHead>
           <div>
             <CardTitle>How a tag reaches a slot</CardTitle>
-            <CardSub>Firestore beats environment beats the committed fallback</CardSub>
+            <CardSub>The table beats environment beats the committed fallback</CardSub>
           </div>
         </CardHead>
         <CardBody className="grid gap-3 text-12 leading-body text-text-3 md:grid-cols-3">

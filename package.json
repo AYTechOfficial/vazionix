@@ -2,7 +2,7 @@
   "name": "vazionix",
   "version": "1.0.0",
   "private": true,
-  "description": "Vazionix — earn crypto from a faucet, PTC ads, shortlinks and offerwalls. Next.js 15 + Firebase.",
+  "description": "Vazionix — earn crypto from a faucet, PTC ads, shortlinks and offerwalls. Next.js 15 + Supabase.",
   "engines": {
     "node": ">=20.9.0"
   },
@@ -12,19 +12,14 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
-    "deploy:functions": "cd functions && npm run build && cd .. && firebase deploy --only functions",
-    "bootstrap:admin": "node --env-file=.env.local scripts/bootstrap-admin.mjs",
-    "seed:config": "node --env-file=.env.local scripts/seed-config.mjs",
-    "seed:catalogue": "node --env-file=.env.local scripts/seed-catalogue.mjs"
+    "seed:config": "node --env-file=.env.local scripts/seed-supabase.mjs --config-only",
+    "seed:catalogue": "node --env-file=.env.local scripts/seed-supabase.mjs --catalogue-only"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.115.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "firebase": "^10.14.1",
-    "firebase-admin": "^12.7.0",
     "framer-motion": "^11.18.2",
     "gsap": "^3.13.0",
     "lucide-react": "^0.469.0",

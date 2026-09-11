@@ -58,7 +58,7 @@ export function AccessDenied({
           <>
             You are signed in, but this account holds no staff role. The admin console is separate from{' '}
             <strong className="font-semibold text-text-2">{brand.domain}</strong> and access is granted by
-            a Super Admin as a Firebase custom claim — it is not something an account can opt into.
+            a Super Admin on the staff table — it is not something an account can opt into.
           </>
         ) : (
           <>
@@ -78,7 +78,8 @@ export function AccessDenied({
       {!notStaff ? (
         <p className="max-w-[52ch] text-11 text-text-3">
           Refused server-side by <code className="font-mono">requirePermission()</code>, not by hiding a
-          button. The same permission is enforced again in <code className="font-mono">firestore.rules</code>{' '}
+          button. The same permission is enforced again at the database layer by RLS and the
+          service-role-only money functions.{' '}
           and in the callable behind this screen.
         </p>
       ) : null}

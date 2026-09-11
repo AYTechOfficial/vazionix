@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { usePathname } from 'next/navigation';
-import { AlertTriangle, History, LogOut, Menu, Monitor, Moon, Search, Sun } from 'lucide-react';
+import { AlertTriangle, History, LogOut, Menu, Moon, Search, Sun } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/lib/theme';
@@ -155,9 +155,6 @@ export function AdminTopBar({
         </dl>
         <p className="px-3 pb-2 text-11 leading-[1.45] text-text-3">{role.desc}</p>
         <Divider className="my-2" />
-        <DropdownItem href="/admin/platform/sessions">
-          <Monitor aria-hidden="true" /> My sessions
-        </DropdownItem>
         <DropdownItem href="/admin/platform/audit">
           <History aria-hidden="true" /> My activity
         </DropdownItem>

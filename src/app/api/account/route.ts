@@ -12,8 +12,8 @@ import { changeUsername, getProfile, updateProfileFields } from '@/server/users'
    ----------------------------------------------------------------------------
    Deliberately narrow. Everything a user may change about themselves is in this
    list, and it contains nothing that decides what they earn — balance, level,
-   bonus and referral tier are server-owned and are not writable from here or
-   from firestore.rules.
+   bonus and referral tier are server-owned, writable only through the ledger
+   functions that the service-role client calls.
    ========================================================================== */
 
 export const runtime = 'nodejs';

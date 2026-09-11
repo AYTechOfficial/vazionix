@@ -10,7 +10,7 @@ import type { PlacementId } from './placements';
 
    THREE WAYS TO FILL A SLOT, in order of preference:
 
-   1. FIRESTORE  (/adUnits/{placementId}) — the live path. Edit in
+   1. ad_units  (the table, keyed by placement id) — the live path. Edit in
       Admin → Ads → Inventory, no deploy. A slot flips from placeholder to live
       the moment the document appears. This is what you will use day to day.
 
@@ -22,7 +22,7 @@ import type { PlacementId } from './placements';
    3. THIS FILE  (`STATIC_UNITS`) — a committed fallback. Useful for the couple
       of units you never intend to change.
 
-   Firestore wins over env, env wins over static.
+   The table wins over env, env wins over static.
 
    ----------------------------------------------------------------------------
    WHAT A TAG LOOKS LIKE
@@ -57,7 +57,7 @@ import type { PlacementId } from './placements';
    walking the DOM. The trade-off is deliberate and the sandbox is the control.
 
    Consequently: ONLY an admin may write /adUnits/{id} (enforced in
-   firestore.rules), because that document is executable content.
+   RLS), because that document is executable content.
    ========================================================================== */
 
 export type AdUnitKind =
@@ -96,7 +96,7 @@ export interface AdUnitConfig {
 
 /* ---- STATIC FALLBACK -------------------------------------------------------
    Intentionally empty. Add entries only for units you want baked into the
-   build; everything else belongs in Firestore so it can change without a
+   build; everything else belongs in the database so it can change without a
    deploy. Left as an empty record rather than deleted so the merge order in
    `resolveAdUnit` stays three-deep and obvious.                            */
 export const STATIC_UNITS: Partial<Record<PlacementId, AdUnitConfig>> = {};
@@ -111,7 +111,7 @@ export const envKeyFor = (placement: PlacementId): string =>
  * Env values are read from a static map rather than `process.env[key]` because
  * Next inlines NEXT_PUBLIC_* at build time by *literal* lookup — a computed
  * index returns undefined in the browser bundle. Only the handful of units
- * most likely to be build-frozen are wired; everything else uses Firestore.
+ * most likely to be build-frozen are wired; everything else uses the table.
  */
 const ENV_UNITS: Partial<Record<PlacementId, string | undefined>> = {
   'global.socialBar': process.env.NEXT_PUBLIC_AD_GLOBAL_SOCIALBAR,
@@ -155,8 +155,8 @@ function unitFromEnv(placement: PlacementId): AdUnitConfig | null {
 /* ---- RESOLUTION ------------------------------------------------------------ */
 
 /**
- * Merge the three sources. `remote` is the Firestore document, passed in by the
- * caller so this module stays free of Firebase imports and can run in a Server
+ * Merge the three sources. `remote` is the row, passed in by the
+ * caller so this module stays free of server-only imports and can run in a Server
  * Component, a Client Component and a seed script alike.
  */
 export function resolveAdUnit(

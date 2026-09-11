@@ -13,9 +13,9 @@ export const metadata: Metadata = { title: 'Users' };
    /admin/users — the master table
    ----------------------------------------------------------------------------
    A Server Component that owns the query. Search term, filter, sort and cursor
-   all arrive as URL parameters and are handed to `listUsers()`, because Firestore
-   paging is cursor-based: a `startAfter` cursor is a document snapshot reference
-   and cannot be reconstructed in the browser.
+   all arrive as URL parameters and are handed to `listUsers()`, because keyset
+   paging is cursor-based: the cursor is a `created_at` timestamp and cannot be
+   reconstructed in the browser.
 
    The KPI row is three `count()` aggregates, not a scan. `count()` bills one read
    per 1000 documents matched; measuring `.size` on a `.get()` would bill every

@@ -37,7 +37,7 @@ import { TopBar } from './TopBar';
    the ⌘K palette and the support panel — and mounts the three providers every
    authenticated page depends on:
 
-     SessionProvider  live profile + balance, streamed from Firestore
+     SessionProvider  live profile + balance, streamed from the database
      RatesProvider    one price for the whole render
      AdProvider       one read of /adUnits for every slot on the page
 

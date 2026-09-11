@@ -21,7 +21,7 @@ import { getProfile, touchUser } from '@/server/users';
 
    2. THE PROFILE, RATES AND AD MAP ARE FETCHED ONCE. All three are handed to the
       shell as props, so the header balance is correct in the initial HTML and a
-      page with a dozen ad slots costs one Firestore read rather than a dozen.
+      page with a dozen ad slots costs one database read rather than a dozen.
 
    3. A SUSPENDED ACCOUNT IS STOPPED HERE. It cannot be stopped only in the API,
       because a suspended user should not see an earning UI at all.

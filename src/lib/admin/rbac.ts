@@ -19,12 +19,12 @@
         in Server Components and Route Handlers. It verifies the session cookie
         with the Admin SDK and reads the custom claims off the *verified*
         token. THIS is the one that stops a request.
-     3. DATA LAYER — `firestore.rules` (`hasPerm()`) and a permission re-check
+     3. DATA LAYER — `RLS` (`hasPerm()`) and a permission re-check
         at the top of every callable in `functions/src/index.ts`. This is the
-        layer that survives someone calling the Firestore REST API directly
+        layer that survives someone calling the PostgREST API directly
         with a stolen ID token, bypassing our server entirely.
 
-   Backed in production by Firebase Auth custom claims:
+   Backed in production by Supabase Auth custom claims:
        { role: 'finance', perms: ['withdrawal.approve', ...], mfa: true }
    Claims ride inside the ID token, so a permission check costs zero document
    reads — which is exactly why they are cheap enough to repeat in all three

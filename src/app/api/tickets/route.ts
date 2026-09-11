@@ -8,7 +8,7 @@ import { listUserTickets, markTicketRead, openTicket, replyToTicket } from '@/se
    GET  /api/tickets — the viewer's tickets with their messages
    POST /api/tickets — { action: 'open' | 'reply' | 'read' }
    ----------------------------------------------------------------------------
-   Ownership is enforced server-side on every action. `firestore.rules` says the
+   Ownership is enforced server-side on every action. RLS says the
    same thing, but a route handler that trusts a ticket id from the body is a
    route handler that lets somebody append to a stranger's ticket.
    ========================================================================== */

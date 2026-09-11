@@ -19,7 +19,7 @@ import { KpiBand, type Kpi } from './KpiBand';
 
    An earlier revision of this component also rendered a "specified in the
    prototype" marker and its KPIs came from fixture modules. Both are gone: a
-   screen with no data now says so with an `EmptyState` naming the Firestore
+   screen with no data now says so with an `EmptyState` naming the table
    collection that drives it, which is information an operator can act on.
    ========================================================================== */
 

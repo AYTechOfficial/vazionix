@@ -57,7 +57,7 @@ export const metadata: Metadata = {
    restyle the dashboard and the admin console.
 
    WHAT IS LIVE VERSUS WHAT IS COPY
-   Live, from Firestore: the three hero counters, the payout ticker, the
+   Live, from Postgres: the three hero counters, the payout ticker, the
    withdrawals-today figure, the settled-payout count, the asset and rail lists,
    the withdrawal minimum, and the referral tiers driving the commission slider.
    Copy, owned by the operator: the testimonials, the four-step explainer, the

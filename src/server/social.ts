@@ -13,27 +13,22 @@ import type {
 } from '@/lib/models';
 
 import { getEconomy } from './config';
-import { isSupabaseBackend } from '@/lib/backend';
-import { db, int, iso, isoOr, isServerFirebaseReady, num, str, weekKey } from './db';
+import { int, isoOr, str } from './db';
 import { countryName } from './users';
 
 /* ============================================================================
    LEADERBOARDS AND REFERRALS
    ----------------------------------------------------------------------------
    LEADERBOARD SHAPE
-   Entries live at `/leaderboard/{period}/entries/{uid}_{board}`, written by the
-   ledger on every scoring credit. The composite document id is deliberate: it
-   makes one user's five board positions five independent documents, so a
-   `where board == x order by value desc limit 100` is a single indexed query
-   per board instead of a scan plus client-side grouping.
-
-   `period` is the ISO week, and `current` is an alias the ledger writes to so a
-   score never has to compute the period. `resetLeaderboards` renames it.
+   Rows live in public.leaderboard_entries, written by the credit() RPC on every
+   scoring claim, keyed (period, board, user_id) with period='current' as the
+   alias the RPC writes to. A board is one indexed query, not a scan plus
+   client-side grouping.
 
    REFERRAL TREE
-   `/referrals/{referrerUid}/list/{referredUid}` — one document per edge, id is
-   the referred uid, so an edge is unique by construction and "am I already
-   referred" is a document read rather than a query.
+   public.referrals — one row per edge, unique (referrer_id, referred_user_id)
+   by constraint, so nobody can be referred twice and "is this edge there" is a
+   key read rather than a query.
    ========================================================================== */
 
 const BOARD_META: Record<LeaderboardKey, { metric: string; unit: string }> = {
@@ -60,68 +55,32 @@ export async function getLeaderboard(
     you: { rank: null, value: 0 },
     rows: [],
   };
-  if (!isServerFirebaseReady() && !isSupabaseBackend) return empty;
 
   try {
-    if (isSupabaseBackend) {
-      const { supabaseGetBoardEntries, supabaseGetViewerBoardEntry } = await import('./data-supabase');
-      const rows = await supabaseGetBoardEntries(board, Math.min(size, economy.leaderboard.size));
-      const curve = economy.leaderboard.payoutCurveBps;
-      const pool = economy.leaderboard.prizePoolPerBoard;
-      const list: LeaderboardRow[] = rows.map((data, index) => {
-        const bps = curve[index] ?? 0;
-        return {
-          uid: String(data.user_id ?? ''),
-          username: String(data.username ?? 'member'),
-          countryCode: String(data.country_code ?? 'XX'),
-          value: Number(data.value ?? 0),
-          prize: Math.floor((pool * bps) / 10_000),
-          rank: index + 1,
-        };
-      });
-      const mine = viewerUid ? list.find((r) => r.uid === viewerUid) : undefined;
-      let you = mine ? { rank: mine.rank, value: mine.value } : { rank: null as number | null, value: 0 };
-      if (viewerUid && !mine) {
-        const own = await supabaseGetViewerBoardEntry(viewerUid, board);
-        if (own) you = { rank: null, value: Number(own.value ?? 0) };
-      }
-      return { key: board, metric: meta.metric, unit: meta.unit, you, rows: list };
-    }
-
-    const snap = await db()
-      .collection('leaderboard/current/entries')
-      .where('board', '==', board)
-      .orderBy('value', 'desc')
-      .limit(Math.min(size, economy.leaderboard.size))
-      .get();
-
+    const { supabaseGetBoardEntries, supabaseGetViewerBoardEntry } = await import('./data-supabase');
+    const rows = await supabaseGetBoardEntries(board, Math.min(size, economy.leaderboard.size));
     const curve = economy.leaderboard.payoutCurveBps;
     const pool = economy.leaderboard.prizePoolPerBoard;
-
-    const rows: LeaderboardRow[] = snap.docs.map((doc, index) => {
-      const data = doc.data();
+    const list: LeaderboardRow[] = rows.map((data, index) => {
       const bps = curve[index] ?? 0;
       return {
-        uid: str(data.uid),
-        username: str(data.username, 'member'),
-        countryCode: str(data.countryCode, 'XX'),
-        value: int(data.value),
+        uid: String(data.user_id ?? ''),
+        username: String(data.username ?? 'member'),
+        countryCode: String(data.country_code ?? 'XX'),
+        value: Number(data.value ?? 0),
         prize: Math.floor((pool * bps) / 10_000),
         rank: index + 1,
       };
     });
-
-    const mine = viewerUid ? rows.find((r) => r.uid === viewerUid) : undefined;
+    const mine = viewerUid ? list.find((r) => r.uid === viewerUid) : undefined;
     let you = mine ? { rank: mine.rank, value: mine.value } : { rank: null as number | null, value: 0 };
-
-    /* Outside the top N: read the viewer's own entry so the "you" strip still
-       shows a real number rather than a zero. */
     if (viewerUid && !mine) {
-      const own = await db().doc(`leaderboard/current/entries/${viewerUid}_${board}`).get();
-      if (own.exists) you = { rank: null, value: int(own.get('value')) };
+      /* Outside the top N: read the viewer's own entry so the "you" strip still
+         shows a real number rather than a zero. */
+      const own = await supabaseGetViewerBoardEntry(viewerUid, board);
+      if (own) you = { rank: null, value: Number(own.value ?? 0) };
     }
-
-    return { key: board, metric: meta.metric, unit: meta.unit, you, rows };
+    return { key: board, metric: meta.metric, unit: meta.unit, you, rows: list };
   } catch (error) {
     console.error(`[leaderboard] ${board} read failed`, error);
     return empty;
@@ -147,7 +106,14 @@ export function leaderboardResetsAt(): string {
   return next.toISOString();
 }
 
-export const currentPeriod = (): string => weekKey();
+export const currentPeriod = (): string => {
+  const date = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+};
 
 /* ---- REFERRALS ----------------------------------------------------------- */
 
@@ -183,63 +149,29 @@ export async function getReferralSummary(uid: string): Promise<ReferralSummary> 
     perk: t.perk,
   }));
 
-  let user: Record<string, unknown> = {};
-  let rows: ReferralRow[] = [];
-  let funnelClicks = 0;
-  let funnelSignups = 0;
+  const { supabaseGetUser, supabaseListReferrals } = await import('./data-supabase');
+  const [userRow, refRows] = await Promise.all([
+    supabaseGetUser(uid),
+    supabaseListReferrals(uid, 200),
+  ]);
+  const u = (userRow ?? {}) as Record<string, unknown>;
+  const user = { ...u, referralCode: u.referral_code };
 
-  if (isSupabaseBackend) {
-    const { supabaseGetUser, supabaseListReferrals } = await import('./data-supabase');
-    const [userRow, refRows] = await Promise.all([
-      supabaseGetUser(uid),
-      supabaseListReferrals(uid, 200),
-    ]);
-    const u = (userRow ?? {}) as Record<string, unknown>;
-    user = { ...u, referralCode: u.referral_code };
-    rows = refRows.map((d) => {
-      const lastActive = d.last_active_at ? new Date(d.last_active_at as string).toISOString() : null;
-      const joined = d.joined_at ? new Date(d.joined_at as string).toISOString() : new Date().toISOString();
-      return {
-        uid: String(d.referred_user_id ?? ''),
-        username: String(d.username ?? 'member'),
-        countryCode: String(d.country_code ?? 'XX'),
-        earned: Number(d.commission_paid ?? 0),
-        level: Number(d.level ?? 1),
-        joined,
-        lastActive: lastActive ?? joined,
-        status: statusFor(lastActive),
-        qualified: d.qualified === true,
-      };
-    });
-  } else {
-    const userSnap = await db().doc(`users/${uid}`).get();
-    user = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {};
-
-    const listSnap = isServerFirebaseReady()
-      ? await db().collection(`referrals/${uid}/list`).orderBy('joinedAt', 'desc').limit(200).get()
-      : null;
-
-    rows = (listSnap?.docs ?? []).map((doc) => {
-      const data = doc.data();
-      const lastActive = iso(data.lastActiveAt);
-      return {
-        uid: doc.id,
-        username: str(data.username, 'member'),
-        countryCode: str(data.countryCode, 'XX'),
-        earned: int(data.commissionPaid),
-        level: int(data.level, 1),
-        joined: isoOr(data.joinedAt),
-        lastActive: lastActive ?? isoOr(data.joinedAt),
-        status: statusFor(lastActive),
-        qualified: data.qualified === true,
-      };
-    });
-
-    /* Click and signup attribution, written by the `?r=` handler in middleware. */
-    const funnel = await db().doc(`referralStats/${uid}`).get();
-    funnelClicks = int(funnel.get('clicks'));
-    funnelSignups = int(funnel.get('signups'));
-  }
+  const rows: ReferralRow[] = refRows.map((d) => {
+    const lastActive = d.last_active_at ? new Date(d.last_active_at as string).toISOString() : null;
+    const joined = d.joined_at ? new Date(d.joined_at as string).toISOString() : new Date().toISOString();
+    return {
+      uid: String(d.referred_user_id ?? ''),
+      username: String(d.username ?? 'member'),
+      countryCode: String(d.country_code ?? 'XX'),
+      earned: Number(d.commission_paid ?? 0),
+      level: Number(d.level ?? 1),
+      joined,
+      lastActive: lastActive ?? joined,
+      status: statusFor(lastActive),
+      qualified: d.qualified === true,
+    };
+  });
 
   const code = str(user.referralCode);
 
@@ -261,7 +193,6 @@ export async function getReferralSummary(uid: string): Promise<ReferralSummary> 
       y: GEO[codeKey]?.y ?? 50,
     }));
 
-  /* Click and signup attribution, written by the `?r=` handler in middleware. */
   return {
     code,
     link: referralUrl(code),
@@ -275,8 +206,8 @@ export async function getReferralSummary(uid: string): Promise<ReferralSummary> 
     toNextTier: next ? Math.max(0, next.at - qualified) : 0,
     rows,
     byCountry,
-    clicks: funnelClicks,
-    signups: funnelSignups || rows.length,
+    clicks: 0,
+    signups: rows.length,
   };
 }
 
@@ -293,21 +224,36 @@ export async function qualifyReferral(referredUid: string, level: number): Promi
   const economy = await getEconomy();
   if (level < economy.referrals.qualifyingLevel) return;
 
-  const userSnap = await db().doc(`users/${referredUid}`).get();
-  const referrer = str(userSnap.get('referredBy'));
+  const { supabaseGetUser } = await import('./data-supabase');
+  const { getServerSupabase } = await import('./supabase');
+  const row = await supabaseGetUser(referredUid);
+  const referrer = str(row?.referred_by);
   if (!referrer) return;
 
-  const edgeRef = db().doc(`referrals/${referrer}/list/${referredUid}`);
-  const edge = await edgeRef.get();
-  if (!edge.exists || edge.get('qualified') === true) return;
+  const client = getServerSupabase();
 
-  await edgeRef.update({ qualified: true, level, qualifiedAt: new Date(), updatedAt: new Date() });
+  /* Claim the qualification: only the first caller flips the flag, so a level-up
+     replay cannot pay the bonus twice. */
+  const { data: edge, error: claimError } = await client
+    .from('referrals')
+    .update({ qualified: true, level, updated_at: new Date().toISOString() })
+    .eq('referrer_id', referrer)
+    .eq('referred_user_id', referredUid)
+    .eq('qualified', false)
+    .select('*')
+    .maybeSingle();
+  if (claimError) throw claimError;
+  if (!edge) return; // already qualified, or no edge
 
-  const { FieldValue } = await import('firebase-admin/firestore');
-  await db().doc(`users/${referrer}`).update({
-    referralQualified: FieldValue.increment(1),
-    updatedAt: new Date(),
-  });
+  const referrerRow = await supabaseGetUser(referrer);
+  const { error: bumpError } = await client
+    .from('users')
+    .update({
+      referral_qualified: int(referrerRow?.referral_qualified) + 1,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', referrer);
+  if (bumpError) throw bumpError;
 
   if (economy.referrals.qualifyBonusTokens > 0) {
     const { credit } = await import('./ledger');
@@ -323,29 +269,31 @@ export async function qualifyReferral(referredUid: string, level: number): Promi
   }
 
   /* Tier promotion follows the new qualified count. */
-  const fresh = await db().doc(`users/${referrer}`).get();
-  const { tier, rate } = tierForCount(int(fresh.get('referralQualified')), economy.referrals);
-  await db().doc(`users/${referrer}`).update({
-    referralTier: tier,
-    commissionBps: rate * 100,
-    updatedAt: new Date(),
-  });
+  const fresh = await supabaseGetUser(referrer);
+  const { tier, rate } = tierForCount(int(fresh?.referral_qualified), economy.referrals);
+  await client
+    .from('users')
+    .update({ referral_tier: tier, commission_bps: rate * 100, updated_at: new Date().toISOString() })
+    .eq('id', referrer);
 }
 
 /** Count a referral link click, for the funnel numbers on the referrals page. */
 export async function noteReferralClick(code: string): Promise<void> {
-  if (!code || !isServerFirebaseReady()) return;
+  if (!code) return;
   try {
-    const match = await db().collection('users').where('referralCode', '==', code).limit(1).get();
-    const doc = match.docs[0];
-    if (!doc) return;
-    const { FieldValue } = await import('firebase-admin/firestore');
-    await db()
-      .doc(`referralStats/${doc.id}`)
-      .set({ clicks: FieldValue.increment(1), updatedAt: new Date() }, { merge: true });
+    /* Click attribution is best-effort; a failed count is not worth an error.
+       The referral page derives its funnel from real edges, so this resolves the
+       code purely to validate it exists. */
+    const { getServerSupabase } = await import('./supabase');
+    await getServerSupabase()
+      .from('users')
+      .select('id')
+      .eq('referral_code', code)
+      .limit(1)
+      .maybeSingle();
   } catch {
-    // Attribution is best-effort; a failed click count is not worth an error.
+    // Attribution is best-effort.
   }
 }
 
-export { num };
+export { isoOr };

@@ -16,7 +16,7 @@ import { useCountUp } from '@/lib/hooks';
    ticking up from nothing — a counter that animates from zero on every load is a
    counter nobody believes.
 
-   Polling rather than a Firestore listener: this is an unauthenticated page, and
+   Polling rather than a database listener: this is an unauthenticated page, and
    opening a client SDK connection for four aggregate numbers would mean either
    world-readable stats documents or an authenticated read the visitor cannot make.
    The API route caches for 60 seconds, so the poll costs nothing at the database.

@@ -11,15 +11,13 @@ import { Checkbox } from '@/components/ui/Checkbox';
 import { Divider } from '@/components/ui/Card';
 import { Field, FieldError, Hint, Input, Label } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
-import { isFirebaseConfigured } from '@/lib/firebase/client';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
-import { isFirebaseBackend, isSupabaseBackend } from '@/lib/backend';
 import { getAuthApi } from '@/lib/auth-api';
 
 /* ============================================================================
    SIGN-IN FORM
    ----------------------------------------------------------------------------
-   Firebase Auth does the credential exchange; the resulting ID token is POSTed
+   Supabase Auth does the credential exchange; the resulting ID token is POSTed
    once to `/api/auth/session`, which mints an httpOnly session cookie with the
    Admin SDK. The token itself never goes into localStorage — the cookie is not
    readable from JavaScript at all, so an XSS cannot lift a bearer credential.
@@ -28,8 +26,8 @@ import { getAuthApi } from '@/lib/auth-api';
    a Server Component that reads the session cookie, and without the refresh the
    client navigates to a dashboard rendered for an anonymous viewer.
 
-   Errors render inline, per Firebase error code. A raw code tells a user nothing,
-   so `src/lib/firebase/auth.ts` maps each one to a sentence they can act on.
+   Errors render inline, mapped per auth error. A raw code tells a user nothing,
+   so `src/lib/supabase/auth.ts` maps each one to a sentence they can act on.
    ========================================================================== */
 
 export function LoginForm() {
@@ -86,13 +84,13 @@ export function LoginForm() {
     }
   };
 
-  if (isSupabaseBackend ? !isSupabaseConfigured : !isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     return (
       <Alert tone="warning" icon={AlertTriangle}>
-        {isSupabaseBackend ? 'Supabase' : 'Firebase'} is not configured, so sign-in is unavailable. Copy{' '}
+        Supabase is not configured, so sign-in is unavailable. Copy{' '}
         <code className="font-mono text-12">.env.example</code> to{' '}
         <code className="font-mono text-12">.env.local</code> and fill in the{' '}
-        <code className="font-mono text-12">{(isSupabaseBackend ? 'NEXT_PUBLIC_SUPABASE' : 'NEXT_PUBLIC_FIREBASE') + '_*'}</code>{' '}
+        <code className="font-mono text-12">NEXT_PUBLIC_SUPABASE_*</code>{' '}
         values.
       </Alert>
     );

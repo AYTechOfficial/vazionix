@@ -14,7 +14,7 @@ export const metadata: Metadata = { title: 'Geography' };
    /admin/analytics/geo — where members are
    ----------------------------------------------------------------------------
    WHY THERE IS NO WORLD MAP OR TOP-COUNTRIES CHART
-   Firestore cannot group by a field. A country breakdown is either one count()
+   Postgres can group by a field but the users table does not carry country yet. A country breakdown is either one count()
    aggregate per country — 200 queries per page load — or a counter collection that
    nothing currently writes. Neither exists, so this screen does not draw a
    distribution.
@@ -103,7 +103,7 @@ export default async function GeoPage() {
       <NotConfigured
         what="Country distribution over the whole base"
         collection="/stats/geo/{countryCode}"
-        how="A real breakdown needs a counter document per country, bumped on registration — Firestore cannot group by a field, and one count() per country would be 200 queries a page load. Nothing writes those counters yet, so only the sample above is real."
+        how="A real breakdown needs a counter row per country, bumped on registration — the users table does not yet carry a populated country_code, and one count() per country would be 200 queries a page load. Nothing writes those counters yet, so only the sample above is real."
       />
     </ScaffoldPage>
   );

@@ -5,13 +5,13 @@ import { getBrowserSupabase } from './client';
 /* ============================================================================
    SUPABASE AUTH (client)
    ----------------------------------------------------------------------------
-   Drop-in replacement for `src/lib/firebase/auth.ts` with the SAME exported
+   The Supabase browser auth module, exporting the SAME function surface the
    function surface and AuthResult shape, so LoginForm / RegisterForm /
    AccountSettings / SessionProvider only change their import line to the
    backend router `src/lib/auth-api.ts`.
 
    SESSION MODEL DIFFERENCE
-   Firebase exchanged a client ID token for a server-minted httpOnly cookie.
+   The previous stack exchanged a client ID token for a server-minted httpOnly cookie.
    Supabase's browser client (via @supabase/ssr) writes its own auth cookies
    automatically on sign-in, encrypted and httpOnly by default, with middleware
    refreshing them. So there is no separate `establishSession` POST — the
@@ -60,7 +60,7 @@ export async function signInWithEmail(email: string, password: string): Promise<
     const { data, error } = await supabase().auth.signInWithPassword({ email, password });
     if (error) return toResult(error);
     return { ok: true, user: { id: data.user.id, email: data.user.email ?? null } };
-  } catch (error) {
+  } catch {
     return { ok: false, message: 'Could not sign you in.' };
   }
 }
@@ -88,7 +88,7 @@ export async function registerWithEmail(
       user: { id: data.user.id, email: data.user.email ?? null },
       message: data.session ? undefined : 'Created. Check your inbox to confirm your email before withdrawing.',
     };
-  } catch (error) {
+  } catch {
     return { ok: false, message: 'Could not create that account.' };
   }
 }
@@ -114,14 +114,14 @@ export async function signInWithGoogle(): Promise<AuthResult> {
     if (error) return toResult(error);
     // OAuth redirects to /auth/callback; return ok so the caller navigates too.
     return { ok: true };
-  } catch (error) {
+  } catch {
     return { ok: false, message: 'Could not start Google sign-in.' };
   }
 }
 
 /* ---- SESSION --------------------------------------------------------------- */
 
-/** Kept for surface-compat with the Firebase module. Supabase manages the
+/** No-op for surface-compat with the older client API. Supabase manages the
     session cookie internally, so this is a no-op. */
 export async function establishSession(): Promise<void> {}
 

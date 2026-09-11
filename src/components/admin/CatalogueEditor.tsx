@@ -71,7 +71,15 @@ export interface CatalogueField {
 
 export interface CatalogueEditorProps {
   /** Whitelisted collection name — `ptcAds`, `shortlinks`, … */
-  collection: 'ptcAds' | 'shortlinks' | 'offerwallProviders' | 'challenges' | 'coupons';
+  collection:
+    | 'ptcAds'
+    | 'shortlinks'
+    | 'offerwallProviders'
+    | 'challenges'
+    | 'coupons'
+    | 'faq'
+    | 'legal'
+    | 'broadcasts';
   /** Singular noun for buttons and dialogs: "PTC campaign". */
   noun: string;
   fields: CatalogueField[];

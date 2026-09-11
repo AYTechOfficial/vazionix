@@ -56,10 +56,6 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
 
-  /* The Firebase Admin SDK is Node-only. Marking it external keeps the server
-     bundle from trying to bundle its optional native and gRPC dependencies. */
-  serverExternalPackages: ['firebase-admin'],
-
   experimental: {
     /* framer-motion and lucide-react both ship large barrel files; this rewrites
        `import { X } from 'lucide-react'` into a deep import at build time. */

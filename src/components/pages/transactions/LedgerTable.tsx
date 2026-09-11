@@ -18,7 +18,7 @@ import { Pill } from '@/components/ui/Pill';
    Every credit and debit on the account, newest first, paged by cursor.
 
    CURSOR PAGING, NOT OFFSET
-   Firestore bills `offset(n)` as n document reads, so "page 20" of a ledger
+   deep offset paging degrades on Postgres, so "page 20" of a ledger
    would cost twenty pages. The cursor is the last row's timestamp, and the
    server resumes from it — one page costs one page.
 

@@ -30,7 +30,7 @@ import { getSiteConfig } from '@/server/config';
 
    LOCKDOWN comes from `/config/site`. Maintenance mode is the single kill switch:
    it stops earning and withdrawals for users and freezes staff money actions
-   (see `LOCKDOWN_FROZEN_PERMS` in src/lib/admin/audit.ts). One switch rather than
+   (see the money-action freeze under maintenance mode). One switch rather than
    two that can disagree.
    ========================================================================== */
 

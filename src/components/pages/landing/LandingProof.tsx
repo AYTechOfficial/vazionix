@@ -8,7 +8,7 @@ import { compact, nf } from '@/lib/format';
    These are MARKETING COPY and they are carried over from the prototype on
    purpose. They are the page's social proof, and they are content the operator
    owns and edits — not fabricated account data of the kind that was stripped out
-   of the dashboard. If you would rather they came from Firestore, they belong in
+   of the dashboard. If you would rather they came from the database, they belong in
    `/config/site`, not in a fixture module.
 
    Markup ported from the HTML prototype unchanged. Styling lives in

@@ -3,10 +3,6 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 
-import { getDb, isFirebaseConfigured } from '@/lib/firebase/client';
-import { isSupabaseBackend, isFirebaseBackend } from '@/lib/backend';
-import { isSupabaseConfigured } from '@/lib/supabase/config';
-import { earningBonusBps, levelFromExp, DEFAULT_ECONOMY } from '@/lib/config/economy';
 import { endpoints, SESSION_EXPIRED_EVENT } from '@/lib/api';
 import type { CoinTicker, UserProfile } from '@/lib/models';
 import { useToast } from '@/components/ui/Toast';
@@ -16,27 +12,15 @@ import { useToast } from '@/components/ui/Toast';
    ----------------------------------------------------------------------------
    One object, one subscription, every screen. The profile arrives from the
    server on first render (so the header balance is correct in the initial HTML)
-   and is then kept live by a Firestore `onSnapshot` on `/users/{uid}`.
-
-   WHY A SNAPSHOT LISTENER AND NOT POLLING
-   Credits arrive from places the browser did not initiate: an offerwall postback
-   lands minutes after the user left the wall, a referral commission lands when
-   somebody else claims, an admin adjustment lands out of nowhere. Polling would
-   either be slow enough to look broken or frequent enough to be expensive. One
-   listener costs one document read per change, and the change is what we care
-   about.
+   and is then kept fresh by polling `/api/account`.
 
    THE BALANCE IS NEVER WRITTEN HERE
-   `firestore.rules` denies client writes to `balance`, `level`, `exp` and
-   `earningBonusBps`. `applyClaim()` below does not set the balance — it records
-   a delta for the header's "+65" animation and lets the listener deliver the
-   authoritative number a moment later. If the two ever disagree, the listener
-   wins, which is the correct precedence on a payouts product.
-
-   WITHOUT FIREBASE CLIENT CONFIG
-   The listener is skipped and `refresh()` re-reads `/api/account` after each
-   action. Everything still works; updates are just request-scoped rather than
-   pushed.
+   No client can write `balance`, `level`, `exp` or `earning_bonus_bps` — only
+   the server's service-role client can, through the ledger. `applyClaim()` below
+   does not set the balance — it records a delta for the header's "+65" animation
+   and the poll (or the API response's `profile`) replaces it with the
+   authoritative number. If the two ever disagree, the server wins, which is the
+   correct precedence on a payouts product.
    ========================================================================== */
 
 interface SessionContextValue {
@@ -79,71 +63,8 @@ export function SessionProvider({ children, initialProfile }: SessionProviderPro
   React.useEffect(() => {
     if (!uid) return;
 
-    // Firebase backend: a Firestore onSnapshot delivers pushed balance changes.
-    if (isFirebaseBackend && isFirebaseConfigured) {
-      let unsubscribe: (() => void) | undefined;
-      let cancelled = false;
-
-      void (async () => {
-        const db = getDb();
-        if (!db) return;
-        const { doc, onSnapshot } = await import('firebase/firestore');
-        if (cancelled) return;
-
-        unsubscribe = onSnapshot(
-          doc(db, 'users', uid),
-          (snap) => {
-            const data = snap.data();
-            if (!data) return;
-
-            /* Only the server-owned numbers are taken from the snapshot. Anything
-               derived (level thresholds, bonus percent) is recomputed from the same
-               config the server used, so the progress bar cannot disagree with the
-               level that produced it. */
-            const totalExp = Number(data.totalExp ?? data.exp ?? 0);
-            const { level, exp, expNext } = levelFromExp(totalExp, DEFAULT_ECONOMY.levels);
-            const streak = Number(data.streakDays ?? 0);
-
-            setProfile((current) =>
-              current
-                ? {
-                    ...current,
-                    balance: Number(data.balance ?? current.balance),
-                    lockedBalance: Number(data.lockedBalance ?? current.lockedBalance),
-                    depositBalance: Number(data.depositBalance ?? current.depositBalance),
-                    totalEarned: Number(data.totalEarned ?? current.totalEarned),
-                    level,
-                    exp,
-                    expNext,
-                    streak,
-                    earningBonus:
-                      Number(data.earningBonusBps ?? earningBonusBps(level, streak, DEFAULT_ECONOMY.levels)) / 100,
-                    suspended: data.suspended === true,
-                    username: typeof data.username === 'string' ? data.username : current.username,
-                    referralTier: current.tier,
-                    tier: (data.referralTier ?? current.tier) as UserProfile['tier'],
-                    commissionRate: Number(data.commissionBps ?? current.commissionRate * 100) / 100,
-                  } as UserProfile
-                : current,
-            );
-          },
-          (error) => {
-            /* A rules failure here means the user document is not readable, which
-               is a configuration problem worth surfacing once rather than silently
-               leaving a stale balance on screen. */
-            console.error('[session] profile listener failed', error);
-          },
-        );
-      })();
-
-      return () => {
-        cancelled = true;
-        unsubscribe?.();
-      };
-    }
-
-    // Supabase backend (or Firebase unconfigured): no pushed listener, so poll
-    // /api/account on an interval so pushed-looking updates still land.
+    // Poll /api/account on an interval so pushed-looking updates (an offerwall
+    // postback, a referral commission, an admin adjustment) land within seconds.
     let alive = true;
     const poll = async () => {
       try {

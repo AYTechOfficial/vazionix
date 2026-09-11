@@ -10,8 +10,6 @@ import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Divider } from '@/components/ui/Card';
 import { Field, FieldError, Hint, Input, Label } from '@/components/ui/Input';
-import { isFirebaseConfigured } from '@/lib/firebase/client';
-import { isFirebaseBackend, isSupabaseBackend } from '@/lib/backend';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
 import { getAuthApi } from '@/lib/auth-api';
 import { brand } from '@/lib/brand';
@@ -30,7 +28,7 @@ import { brand } from '@/lib/brand';
    server resolves it to a uid. Nothing here can claim to have been referred by a
    uid, because it never sends one.
 
-   Password strength is checked client-side as feedback and enforced by Firebase.
+   Password strength is checked client-side as feedback and enforced by the auth provider.
    The 10-character floor is deliberate: a passphrase beats a short complex string,
    and complexity rules push people toward `Password1!`.
    ========================================================================== */
@@ -113,13 +111,13 @@ export function RegisterForm() {
     }
   };
 
-  if (isSupabaseBackend ? !isSupabaseConfigured : !isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     return (
       <Alert tone="warning" icon={AlertTriangle}>
-        {(isSupabaseBackend ? 'Supabase' : 'Firebase')} is not configured, so registration is unavailable. Copy{' '}
+        Supabase is not configured, so registration is unavailable. Copy{' '}
         <code className="font-mono text-12">.env.example</code> to{' '}
         <code className="font-mono text-12">.env.local</code> and fill in the{' '}
-        <code className="font-mono text-12">{(isSupabaseBackend ? 'NEXT_PUBLIC_SUPABASE' : 'NEXT_PUBLIC_FIREBASE') + '_*'}</code>{' '}
+        <code className="font-mono text-12">NEXT_PUBLIC_SUPABASE_*</code>{' '}
         values.
       </Alert>
     );

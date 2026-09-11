@@ -4,8 +4,7 @@ import type { PtcAdItem, ShortlinkItem } from '@/lib/models';
 
 import { assertCaptcha } from '../captcha';
 import { getEconomy, getSiteConfig } from '../config';
-import { AppError, bool, db, int, iso, isServerFirebaseReady, num, str } from '../db';
-import { isSupabaseBackend } from '@/lib/backend';
+import { AppError, bool, int, num, str } from '../db';
 import {
   supabaseClaimCountsByRef,
   supabaseGetRow,
@@ -27,16 +26,18 @@ import {
 /* ============================================================================
    PTC ADS AND SHORTLINKS
    ----------------------------------------------------------------------------
-   Both catalogues are Firestore collections you fill from Admin → Modules.
-   Neither ships with inventory: a faucet's PTC list is its advertisers' copy and
-   its shortlink list is its own affiliate links, and inventing either would put
+   Both catalogues are Supabase tables you fill from Admin → Modules. Neither
+   ships with inventory: a faucet's PTC list is its advertisers' copy and its
+   shortlink list is its own affiliate links, and inventing either would put
    dead links in front of your users on day one.
 
-     /ptcAds/{id}      title, description, targetUrl, tokens, seconds,
-                       cooldownHours, type, enabled, dailyCap
-     /shortlinks/{id}  name, targetUrl, reward, seconds, cap, provider, enabled
+     ptc_ads     title, description, tokens, seconds, cooldown_hours, type,
+                 target_url, enabled, daily_cap, views_purchased,
+                 views_delivered, last_viewed_at
+     shortlinks  name, target_url, reward, seconds, cap, provider,
+                 cooldown_hours, enabled
 
-   The shortlink `targetUrl` is where your AdsLab or Adsterra direct link goes —
+   The shortlink `target_url` is where your AdsLab or Adsterra direct link goes —
    that is the monetised hop, and `shortlink.directLink` in the ad placement map
    is the same URL expressed as ad inventory.
    ========================================================================== */
@@ -64,29 +65,18 @@ export async function listPtcAds(uid: string | null): Promise<{
 }> {
   const economy = await getEconomy();
 
-  /* Rows come back with the same field names on both backends because the
-     Supabase columns were named to match the Firestore document keys, except for
-     the snake_case ones normalised here. */
-  let rows: Array<{ id: string; data: Record<string, unknown> }> = [];
-
-  if (isSupabaseBackend) {
-    const list = await supabaseListEnabled('ptc_ads', 'tokens', 200);
-    rows = list.map((r) => ({
-      id: String(r.id),
-      data: { ...r, cooldownHours: r.cooldown_hours, targetUrl: r.target_url, viewsDelivered: r.views_delivered },
-    }));
-  } else {
-    if (!isServerFirebaseReady()) {
-      return { ads: [], totals: { available: 0, reward: 0, seconds: 0, byType: {} } };
-    }
-    const snap = await db()
-      .collection('ptcAds')
-      .where('enabled', '==', true)
-      .orderBy('tokens', 'desc')
-      .limit(200)
-      .get();
-    rows = snap.docs.map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> }));
-  }
+  /* Rows come back with the Supabase snake_case columns; the camelCase keys
+     the item mappers read are normalised here. */
+  const list = await supabaseListEnabled('ptc_ads', 'tokens', 200);
+  const rows = list.map((r) => ({
+    id: String(r.id),
+    data: {
+      ...r,
+      cooldownHours: r.cooldown_hours,
+      targetUrl: r.target_url,
+      viewsDelivered: r.views_delivered,
+    },
+  }));
 
   const ids = rows.map((r) => r.id);
   const cooldowns = uid ? await cooldownMap(uid, 'ptc', ids) : {};
@@ -110,31 +100,26 @@ export async function listPtcAds(uid: string | null): Promise<{
   };
 }
 
-/** Load one catalogue row on either backend, normalising snake_case keys. */
+/** Load one catalogue row, normalising snake_case keys. */
 async function loadItem(
-  supabaseTable: 'ptc_ads' | 'shortlinks',
-  firestorePath: string,
+  table: 'ptc_ads' | 'shortlinks',
   id: string,
 ): Promise<Record<string, unknown> | null> {
-  if (isSupabaseBackend) {
-    const row = await supabaseGetRow(supabaseTable, id);
-    if (!row) return null;
-    return {
-      ...row,
-      targetUrl: row.target_url,
-      cooldownHours: row.cooldown_hours,
-      viewsDelivered: row.views_delivered,
-    };
-  }
-  const snap = await db().doc(`${firestorePath}/${id}`).get();
-  return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+  const row = await supabaseGetRow(table, id);
+  if (!row) return null;
+  return {
+    ...row,
+    targetUrl: row.target_url,
+    cooldownHours: row.cooldown_hours,
+    viewsDelivered: row.views_delivered,
+  };
 }
 
 export async function startPtcView(uid: string, adId: string): Promise<TaskSession & { targetUrl: string; title: string }> {
   const [economy, site] = await Promise.all([getEconomy(), getSiteConfig()]);
   if (!site.earningOpen) throw new AppError('Earning is paused right now.', 503, 'earning_paused');
 
-  const data = await loadItem('ptc_ads', 'ptcAds', adId);
+  const data = await loadItem('ptc_ads', adId);
   assertItemUsable(data ? { enabled: bool(data.enabled, true), targetUrl: str(data.targetUrl) } : null, 'Campaign');
 
   await assertNotCoolingDown(uid, 'ptc', adId);
@@ -170,9 +155,8 @@ export async function completePtcView(args: {
     graceSeconds: 2,
   });
 
-  const snap2 = await loadItem('ptc_ads', 'ptcAds', closed.itemId);
-  if (!snap2) throw new AppError('That campaign was removed.', 404, 'not_found');
-  const data = snap2;
+  const data = await loadItem('ptc_ads', closed.itemId);
+  if (!data) throw new AppError('That campaign was removed.', 404, 'not_found');
 
   const result = await credit({
     uid: args.uid,
@@ -187,18 +171,13 @@ export async function completePtcView(args: {
 
   const availableAt = await setCooldown(args.uid, 'ptc', closed.itemId, num(data.cooldownHours, 24));
 
-  /* Advertiser accounting: one delivered view against the campaign's purchase. */
-  if (isSupabaseBackend) {
-    await supabaseUpdateRow('ptc_ads', closed.itemId, {
-      views_delivered: int(data.viewsDelivered) + 1,
-      last_viewed_at: new Date().toISOString(),
-    }).catch(() => {});
-  } else {
-    await db()
-      .doc(`ptcAds/${closed.itemId}`)
-      .set({ viewsDelivered: int(data.viewsDelivered) + 1, lastViewedAt: new Date() }, { merge: true })
-      .catch(() => {});
-  }
+  /* Advertiser accounting: one delivered view against the campaign's purchase.
+     Read-then-write increment — PostgREST cannot express `views_delivered =
+     views_delivered + 1` directly, and a missed counter tick is harmless. */
+  await supabaseUpdateRow('ptc_ads', closed.itemId, {
+    views_delivered: int(data.viewsDelivered) + 1,
+    last_viewed_at: new Date().toISOString(),
+  }).catch(() => {});
   await bumpStat({ ptcViews: 1 });
 
   return { ...result, availableAt };
@@ -235,26 +214,15 @@ export async function listShortlinks(uid: string | null): Promise<{
   const midnight = new Date();
   midnight.setUTCHours(24, 0, 0, 0);
 
-  let rows: Array<{ id: string; data: Record<string, unknown> }> = [];
-
-  if (isSupabaseBackend) {
-    const list = await supabaseListEnabled('shortlinks', 'reward', 300);
-    rows = list.map((r) => ({
-      id: String(r.id),
-      data: { ...r, targetUrl: r.target_url, cooldownHours: r.cooldown_hours },
-    }));
-  } else {
-    if (!isServerFirebaseReady()) {
-      return { links: [], totals: { available: 0, reward: 0, exp: 0, resetAt: midnight.toISOString() } };
-    }
-    const snap = await db()
-      .collection('shortlinks')
-      .where('enabled', '==', true)
-      .orderBy('reward', 'desc')
-      .limit(300)
-      .get();
-    rows = snap.docs.map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> }));
-  }
+  const list = await supabaseListEnabled('shortlinks', 'reward', 300);
+  const rows = list.map((r) => ({
+    id: String(r.id),
+    data: {
+      ...r,
+      targetUrl: r.target_url,
+      cooldownHours: r.cooldown_hours,
+    },
+  }));
 
   const ids = rows.map((r) => r.id);
   const [cooldowns, usage] = await Promise.all([
@@ -288,31 +256,14 @@ export async function listShortlinks(uid: string | null): Promise<{
 async function shortlinkUsageToday(uid: string): Promise<Record<string, number>> {
   const startOfDay = new Date();
   startOfDay.setUTCHours(0, 0, 0, 0);
-
-  if (isSupabaseBackend) {
-    return supabaseClaimCountsByRef(uid, 'shortlink', startOfDay.toISOString());
-  }
-
-  const snap = await db()
-    .collection(`users/${uid}/claims`)
-    .where('source', '==', 'shortlink')
-    .where('createdAt', '>=', startOfDay)
-    .limit(500)
-    .get();
-
-  const out: Record<string, number> = {};
-  for (const doc of snap.docs) {
-    const refId = str(doc.get('refId'));
-    if (refId) out[refId] = (out[refId] ?? 0) + 1;
-  }
-  return out;
+  return supabaseClaimCountsByRef(uid, 'shortlink', startOfDay.toISOString());
 }
 
 export async function startShortlink(uid: string, linkId: string): Promise<TaskSession & { targetUrl: string; name: string }> {
   const [economy, site] = await Promise.all([getEconomy(), getSiteConfig()]);
   if (!site.earningOpen) throw new AppError('Earning is paused right now.', 503, 'earning_paused');
 
-  const data = await loadItem('shortlinks', 'shortlinks', linkId);
+  const data = await loadItem('shortlinks', linkId);
   assertItemUsable(data ? { enabled: bool(data.enabled, true), targetUrl: str(data.targetUrl) } : null, 'Shortlink');
 
   await assertNotCoolingDown(uid, 'shortlink', linkId);
@@ -355,9 +306,8 @@ export async function completeShortlink(args: {
     graceSeconds: 3,
   });
 
-  const item = await loadItem('shortlinks', 'shortlinks', closed.itemId);
-  if (!item) throw new AppError('That shortlink was removed.', 404, 'not_found');
-  const data = item;
+  const data = await loadItem('shortlinks', closed.itemId);
+  if (!data) throw new AppError('That shortlink was removed.', 404, 'not_found');
 
   const result = await credit({
     uid: args.uid,
@@ -380,7 +330,7 @@ export async function completeShortlink(args: {
 
 /** Resolve a shortlink's monetised destination, for the countdown page. */
 export async function getShortlinkTarget(linkId: string): Promise<{ name: string; targetUrl: string; seconds: number } | null> {
-  const data = await loadItem('shortlinks', 'shortlinks', linkId);
+  const data = await loadItem('shortlinks', linkId);
   if (!data) return null;
   if (!bool(data.enabled, true)) return null;
   return {
@@ -389,5 +339,3 @@ export async function getShortlinkTarget(linkId: string): Promise<{ name: string
     seconds: int(data.seconds, 180),
   };
 }
-
-export { iso };

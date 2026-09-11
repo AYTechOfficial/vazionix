@@ -144,10 +144,10 @@ export default async function AccountingPage() {
         <CardBody className="text-13 leading-body text-text-3">
           <p>
             There is no export endpoint in this build. The two sources an accountant needs are already
-            queryable directly: <code className="font-mono text-12">/withdrawals</code> for cash movements
-            with a txid per row, and <code className="font-mono text-12">/stats/daily/days</code> for the
-            accrual series above. Both export cleanly from the Firebase console or with{' '}
-            <code className="font-mono text-12">firebase firestore:export</code>.
+            queryable directly: the <code className="font-mono text-12">withdrawals</code> table for cash
+            movements with a txid per row, and the <code className="font-mono text-12">stats</code> table
+            for the accrual series above. Both export cleanly from the Supabase dashboard (SQL editor →
+            CSV) or <code className="font-mono text-12">pg_dump</code>.
           </p>
           <p className="mt-2">
             A browser-side CSV button here would produce a file with no audit row saying who took it, which for

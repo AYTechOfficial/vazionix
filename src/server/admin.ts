@@ -8,17 +8,11 @@ import type {
 } from '@/lib/models';
 
 import { getRates } from './config';
-import { isSupabaseBackend } from '@/lib/backend';
 import {
-  FieldValue,
   bool,
-  db,
   int,
   iso,
   isoOr,
-  isServerFirebaseReady,
-  now,
-  num,
   str,
 } from './db';
 import { getDailySeries, getLiabilityUsd, getPlatformStats, type DailyStatRow } from './stats';
@@ -27,20 +21,17 @@ import { pendingPayoutTotal, railStatus } from './payouts';
 /* ============================================================================
    ADMIN DATA
    ----------------------------------------------------------------------------
-   Every read the staff console makes, against real Firestore. The previous
-   revision of this project served the admin screens from 27 hand-written
-   fixture modules; those are gone, and each function here answers with what is
-   actually in the database — including "nothing yet", which is the correct
-   answer for a fresh install and the one a fixture can never give.
+   Every read and write the staff console makes, against Postgres through the
+   service-role client. Each function answers with what is actually in the
+   database — including "nothing yet", which is the correct answer for a fresh
+   install.
 
    PAGINATION IS CURSOR-BASED
-   `startAfter` on a document snapshot, not `offset`. Firestore bills `offset` as
-   reads of every skipped document, so page 40 of the user table would cost 40
-   pages of reads. Cursors cost the page you asked for.
+   `created_at < last-seen`, not `offset`. The user table grows without bound
+   and an offset scan walks every skipped row on every page.
 
    AGGREGATES USE count()
-   Row counts come from `count()` aggregate queries, billed at one read per 1000
-   documents matched. A `.get()` to measure `.size` bills every document.
+   Row counts come from PostgREST's `count: 'exact'` head requests.
    ========================================================================== */
 
 /* ---- COMMAND CENTRE ------------------------------------------------------- */
@@ -95,56 +86,51 @@ export async function getAdminOverview(): Promise<AdminOverview> {
 
 type Filter = [string, '==' | '>=' | '<=' | 'in' | '>' | '<', unknown];
 
-/** Firestore collection name -> Supabase table name, where they differ. */
-const SUPABASE_TABLE: Record<string, string> = {
+/** Logical collection name (what the pages pass) -> actual table. */
+const TABLE_FOR: Record<string, string> = {
   ptcAds: 'ptc_ads',
   offerwallProviders: 'offerwall_providers',
   offerwallConversions: 'offerwall_conversions',
   lotteryTickets: 'lottery_tickets',
+  lotteryRounds: 'lottery_rounds',
+  leaderboards: 'leaderboard_entries',
   adUnits: 'ad_units',
   auditLog: 'audit_log',
 };
 
-/** Firestore field name -> Supabase column name, where they differ. */
-const SUPABASE_COLUMN: Record<string, string> = {
+/** camelCase field the pages filter on -> snake_case column. */
+const COLUMN_FOR: Record<string, string> = {
   uid: 'user_id',
   lastMessageAt: 'last_message_at',
   createdAt: 'created_at',
   processedAt: 'processed_at',
   tokenCost: 'token_cost',
   countryCode: 'country_code',
+  emailVerified: 'email_verified',
+  unreadForSupport: 'unread_for_support',
+  suspendedUntil: 'suspended_until',
+  status: 'status',
+  suspended: 'suspended',
+  enabled: 'enabled',
+  source: 'source',
 };
 
 export async function countWhere(collection: string, filters: Filter[] = []): Promise<number> {
-  if (isSupabaseBackend) {
-    /* The console's counts use equality and IN only, which map cleanly onto a
-       Postgres count. An unsupported operator returns 0 and LOGS, rather than
-       quietly producing a wrong number on a screen used to make decisions. */
-    try {
-      const { supabaseCountWhere } = await import('./data-supabase');
-      const mapped: Array<[string, '==' | 'in', unknown]> = [];
-      for (const [field, op, value] of filters) {
-        if (op !== '==' && op !== 'in') {
-          console.error(`[admin] countWhere: unsupported operator ${op} on ${collection}.${field}`);
-          return 0;
-        }
-        mapped.push([SUPABASE_COLUMN[field] ?? field, op, value]);
-      }
-      return await supabaseCountWhere(SUPABASE_TABLE[collection] ?? collection, mapped);
-    } catch (error) {
-      console.error(`[admin] supabase count on ${collection} failed`, error);
-      return 0;
-    }
-  }
-
-  if (!isServerFirebaseReady()) return 0;
+  /* The console's counts use equality and IN only, which map cleanly onto a
+     Postgres count. An unsupported operator returns 0 and LOGS, rather than
+     quietly producing a wrong number on a screen used to make decisions. */
   try {
-    let query = db().collection(collection) as unknown as import('firebase-admin/firestore').Query;
+    const { supabaseCountWhere } = await import('./data-supabase');
+    const table = TABLE_FOR[collection] ?? collection;
+    const mapped: Array<[string, '==' | 'in', unknown]> = [];
     for (const [field, op, value] of filters) {
-      query = query.where(field, op as FirebaseFirestore.WhereFilterOp, value);
+      if (op !== '==' && op !== 'in') {
+        console.error(`[admin] countWhere: unsupported operator ${op} on ${table}.${field}`);
+        return 0;
+      }
+      mapped.push([COLUMN_FOR[field] ?? field, op, value]);
     }
-    const snap = await query.count().get();
-    return int(snap.data().count);
+    return await supabaseCountWhere(table, mapped);
   } catch (error) {
     console.error(`[admin] count on ${collection} failed`, error);
     return 0;
@@ -231,107 +217,49 @@ export async function listUsers(options: {
   const limit = Math.min(100, Math.max(5, options.limit ?? 25));
   const search = options.search?.trim().toLowerCase();
 
-  if (isSupabaseBackend) {
-    const { getServerSupabase } = await import('./supabase');
-    const supabase = getServerSupabase();
-    const sortColumn =
-      options.sort === 'balance' ? 'balance'
-      : options.sort === 'totalEarned' ? 'total_earned'
-      : options.sort === 'level' ? 'level'
-      : 'created_at';
+  const { getServerSupabase } = await import('./supabase');
+  const supabase = getServerSupabase();
+  const sortColumn =
+    options.sort === 'balance' ? 'balance'
+    : options.sort === 'totalEarned' ? 'total_earned'
+    : options.sort === 'level' ? 'level'
+    : 'created_at';
 
-    let q = supabase.from('users').select('*', { count: 'exact' });
+  let q = supabase.from('users').select('*', { count: 'exact' });
 
-    /* Postgres CAN do substring search, so the console's search box actually
-       matches anywhere in the handle or email rather than prefix-only. */
-    if (search) {
-      q = q.or(`username_lower.ilike.%${search}%,email.ilike.%${search}%`);
-    }
-    if (options.suspended !== undefined) q = q.eq('suspended', options.suspended);
-
-    const { data, count, error } = await q.order(sortColumn, { ascending: false }).limit(limit);
-    if (error) {
-      console.error('[admin] supabase user list failed', error);
-      return { rows: [], cursor: null, total: 0 };
-    }
-
-    const rows = (data ?? []).map((r) =>
-      userRow(String(r.id), {
-        ...r,
-        usernameLower: r.username_lower,
-        countryCode: r.country_code,
-        lockedBalance: r.locked_balance,
-        totalEarned: r.total_earned,
-        referralCount: r.referral_qualified,
-        emailVerified: r.email_verified,
-        createdAt: r.created_at,
-        lastSeenAt: r.last_seen_at,
-      } as Record<string, unknown>),
-    );
-    return { rows, cursor: null, total: count ?? rows.length };
-  }
-
-  if (!isServerFirebaseReady()) return { rows: [], cursor: null, total: 0 };
-
-  /* A search is a prefix range on `usernameLower`, or an exact email match.
-     Firestore has no substring search; anything more than this needs an external
-     index, and pretending otherwise would produce a search box that silently
-     misses results. */
+  /* Postgres CAN do substring search, so the console's search box actually
+     matches anywhere in the handle or email rather than prefix-only. */
   if (search) {
-    const [byName, byEmail] = await Promise.all([
-      db()
-        .collection('users')
-        .orderBy('usernameLower')
-        .startAt(search)
-        .endAt(`${search}\uf8ff`)
-        .limit(limit)
-        .get(),
-      search.includes('@')
-        ? db().collection('users').where('email', '==', search).limit(5).get()
-        : Promise.resolve(null),
-    ]);
+    const safe = search.replace(/[%,()]/g, '');
+    q = q.or(`username_lower.ilike.%${safe}%,email.ilike.%${safe}%`);
+  }
+  if (options.suspended !== undefined) q = q.eq('suspended', options.suspended);
+  if (options.cursor) q = q.lt('created_at', options.cursor);
 
-    const seen = new Set<string>();
-    const rows: AdminUserRow[] = [];
-    for (const doc of [...byName.docs, ...(byEmail?.docs ?? [])]) {
-      if (seen.has(doc.id)) continue;
-      seen.add(doc.id);
-      rows.push(userRow(doc.id, doc.data() as Record<string, unknown>));
-    }
-    return { rows, cursor: null, total: rows.length };
+  const { data, count, error } = await q
+    .order(sortColumn, { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.error('[admin] user list failed', error);
+    return { rows: [], cursor: null, total: 0 };
   }
 
-  let query = db()
-    .collection('users')
-    .orderBy(options.sort ?? 'createdAt', 'desc')
-    .limit(limit + 1);
-
-  if (options.suspended !== undefined) {
-    query = db()
-      .collection('users')
-      .where('suspended', '==', options.suspended)
-      .orderBy('createdAt', 'desc')
-      .limit(limit + 1);
-  }
-
-  if (options.cursor) {
-    const anchor = await db().doc(`users/${options.cursor}`).get();
-    if (anchor.exists) query = query.startAfter(anchor);
-  }
-
-  const [snap, total] = await Promise.all([
-    query.get(),
-    countWhere('users', options.suspended !== undefined ? [['suspended', '==', options.suspended]] : []),
-  ]);
-
-  const docs = snap.docs.slice(0, limit);
-  const last = docs[docs.length - 1];
-
-  return {
-    rows: docs.map((doc) => userRow(doc.id, doc.data() as Record<string, unknown>)),
-    cursor: snap.docs.length > limit && last ? last.id : null,
-    total,
-  };
+  const rows = (data ?? []).map((r) =>
+    userRow(String(r.id), {
+      ...r,
+      usernameLower: r.username_lower,
+      countryCode: r.country_code,
+      lockedBalance: r.locked_balance,
+      totalEarned: r.total_earned,
+      referralCount: r.referral_qualified,
+      referralQualified: r.referral_qualified,
+      emailVerified: r.email_verified,
+      createdAt: r.created_at,
+      lastSeenAt: r.last_seen_at,
+    } as Record<string, unknown>),
+  );
+  const last = rows[rows.length - 1];
+  return { rows, cursor: rows.length >= limit && last ? last.createdAt : null, total: count ?? rows.length };
 }
 
 export interface AdminUserDetail extends AdminUserRow {
@@ -351,50 +279,85 @@ export interface AdminUserDetail extends AdminUserRow {
 }
 
 export async function getUserDetail(uid: string): Promise<AdminUserDetail | null> {
-  if (!isServerFirebaseReady()) return null;
+  const {
+    supabaseGetUser,
+    supabaseListClaims,
+    supabaseListWithdrawals,
+    supabaseListReferrals,
+    supabaseListUserTickets,
+  } = await import('./data-supabase');
 
-  const snap = await db().doc(`users/${uid}`).get();
-  if (!snap.exists) return null;
-  const data = snap.data() as Record<string, unknown>;
+  const row = await supabaseGetUser(uid);
+  if (!row) return null;
+  const u = row as Record<string, unknown>;
 
-  const [claims, withdrawals, referrals, tickets] = await Promise.all([
-    db().collection(`users/${uid}/claims`).orderBy('createdAt', 'desc').limit(50).get(),
-    db().collection('withdrawals').where('uid', '==', uid).orderBy('createdAt', 'desc').limit(25).get(),
-    db().collection(`referrals/${uid}/list`).orderBy('joinedAt', 'desc').limit(50).get(),
-    db().collection('tickets').where('uid', '==', uid).orderBy('lastMessageAt', 'desc').limit(20).get(),
+  const [claimRows, wdRows, refRows, ticketRows] = await Promise.all([
+    supabaseListClaims(uid, { limit: 50, source: null, cursorIso: null }),
+    supabaseListWithdrawals(uid, 25),
+    supabaseListReferrals(uid, 50),
+    supabaseListUserTickets(uid, 20),
   ]);
+
+  const data: Record<string, unknown> = {
+    ...u,
+    usernameLower: u.username_lower,
+    countryCode: u.country_code,
+    lockedBalance: u.locked_balance,
+    totalEarned: u.total_earned,
+    referralCount: u.referral_qualified,
+    referralQualified: u.referral_qualified,
+    emailVerified: u.email_verified,
+    createdAt: u.created_at,
+    lastSeenAt: u.last_seen_at,
+    referralCode: u.referral_code,
+    referredBy: u.referred_by,
+    referralTier: u.referral_tier,
+    commissionBps: u.commission_bps,
+    earningBonusBps: u.earning_bonus_bps,
+    streakDays: u.streak_days,
+    claimCounts: u.claim_counts,
+    suspendedReason: u.suspended_reason,
+    signupIp: u.signup_ip,
+  };
 
   return {
     ...userRow(uid, data),
     referralCode: str(data.referralCode),
-    referredBy: data.referredBy ? str(data.referredBy) : null,
+    referredBy: data.referredBy ? String(data.referredBy) : null,
     referralTier: str(data.referralTier, 'Bronze'),
     commissionBps: int(data.commissionBps),
     earningBonusBps: int(data.earningBonusBps),
     streakDays: int(data.streakDays),
     claimCounts: (data.claimCounts ?? {}) as Record<string, number>,
-    suspendedReason: data.suspendedReason ? str(data.suspendedReason) : null,
-    signupIp: data.signupIp ? str(data.signupIp) : null,
-    recentClaims: claims.docs.map((doc) => ({
-      id: doc.id,
-      source: str(doc.get('source')),
-      amount: int(doc.get('amount')),
-      label: str(doc.get('label')),
-      at: isoOr(doc.get('createdAt')),
+    suspendedReason: data.suspendedReason ? String(data.suspendedReason) : null,
+    signupIp: data.signupIp ? String(data.signupIp) : null,
+    recentClaims: claimRows.slice(0, 50).map((c) => ({
+      id: String(c.id ?? ''),
+      source: String(c.source ?? ''),
+      amount: Number(c.amount ?? 0),
+      label: String(c.label ?? c.ref_id ?? c.source ?? ''),
+      at: c.created_at ? new Date(c.created_at as string).toISOString() : new Date().toISOString(),
     })),
-    withdrawals: withdrawals.docs.map((doc) => adminWithdrawalRow(doc.id, doc.data() as Record<string, unknown>)),
-    referrals: referrals.docs.map((doc) => ({
-      uid: doc.id,
-      username: str(doc.get('username'), 'member'),
-      level: int(doc.get('level'), 1),
-      qualified: doc.get('qualified') === true,
-      joined: isoOr(doc.get('joinedAt')),
+    withdrawals: wdRows.map((r) =>
+      adminWithdrawalRow(String(r.id), {
+        ...r, uid: r.user_id, countryCode: r.country_code, receiveAmount: r.receive_amount,
+        tokenCost: r.token_cost, createdAt: r.created_at, processedAt: r.processed_at,
+        failureReason: r.failure_reason, reviewedBy: r.reviewed_by,
+        usdValue: String((Number(r.quoted_usd_per_unit ?? 0) || 0) * (Number(r.amount ?? 0) || 0)),
+      } as Record<string, unknown>),
+    ),
+    referrals: refRows.map((d) => ({
+      uid: String(d.referred_user_id ?? ''),
+      username: String(d.username ?? 'member'),
+      level: Number(d.level ?? 1),
+      qualified: d.qualified === true,
+      joined: d.joined_at ? new Date(d.joined_at as string).toISOString() : new Date().toISOString(),
     })),
-    tickets: tickets.docs.map((doc) => ({
-      id: doc.id,
-      subject: str(doc.get('subject')),
-      status: str(doc.get('status'), 'Open'),
-      updated: isoOr(doc.get('lastMessageAt')),
+    tickets: ticketRows.map((t) => ({
+      id: String(t.id ?? ''),
+      subject: String(t.subject ?? 'Support'),
+      status: String(t.status ?? 'Open'),
+      updated: t.last_message_at ? new Date(t.last_message_at as string).toISOString() : new Date().toISOString(),
     })),
   };
 }
@@ -445,90 +408,42 @@ export async function listWithdrawalQueue(options: {
   const limit = Math.min(100, Math.max(5, options.limit ?? 25));
   const status = options.status ?? 'queue';
 
-  if (isSupabaseBackend) {
-    const { supabaseWithdrawalsByStatus, supabaseCountWhere } = await import('./data-supabase');
-    const statuses =
-      status === 'queue' ? ['Pending', 'HeldForReview', 'Processing']
-      : status === 'all' ? []
-      : [status];
+  const { supabaseWithdrawalsByStatus, supabaseCountWhere } = await import('./data-supabase');
+  const statuses =
+    status === 'queue' ? ['Pending', 'HeldForReview', 'Processing']
+    : status === 'all' ? ['Pending', 'HeldForReview', 'Processing', 'Completed', 'Rejected', 'Failed', 'Reversed']
+    : [status];
 
-    try {
-      const rows = statuses.length
-        ? await supabaseWithdrawalsByStatus(statuses, limit)
-        : await supabaseWithdrawalsByStatus(
-            ['Pending', 'HeldForReview', 'Processing', 'Completed', 'Rejected', 'Failed', 'Reversed'],
-            limit,
-          );
+  try {
+    const [rows, total] = await Promise.all([
+      supabaseWithdrawalsByStatus(statuses, limit),
+      supabaseCountWhere('withdrawals', [['status', 'in', statuses]]),
+    ]);
 
-      const total = statuses.length
-        ? await supabaseCountWhere('withdrawals', [['status', 'in', statuses]])
-        : await supabaseCountWhere('withdrawals');
-
-      return {
-        rows: rows.map((r) =>
-          adminWithdrawalRow(String(r.id), {
-            ...r,
-            uid: r.user_id,
-            countryCode: r.country_code,
-            receiveAmount: r.receive_amount,
-            tokenCost: r.token_cost,
-            createdAt: r.created_at,
-            processedAt: r.processed_at,
-            failureReason: r.failure_reason,
-            reviewedBy: r.reviewed_by,
-            /* No denormalised usdValue on the Postgres row: derive from the quote
-               the user was shown, so the console total matches their receipt. */
-            usdValue: String((Number(r.quoted_usd_per_unit ?? 0) || 0) * (Number(r.amount ?? 0) || 0)),
-          } as Record<string, unknown>),
-        ),
-        cursor: null,
-        total,
-      };
-    } catch (error) {
-      console.error('[admin] supabase withdrawal queue failed', error);
-      return { rows: [], cursor: null, total: 0 };
-    }
+    return {
+      rows: rows.map((r) =>
+        adminWithdrawalRow(String(r.id), {
+          ...r,
+          uid: r.user_id,
+          countryCode: r.country_code,
+          receiveAmount: r.receive_amount,
+          tokenCost: r.token_cost,
+          createdAt: r.created_at,
+          processedAt: r.processed_at,
+          failureReason: r.failure_reason,
+          reviewedBy: r.reviewed_by,
+          /* No denormalised usdValue on the Postgres row: derive from the quote
+             the user was shown, so the console total matches their receipt. */
+          usdValue: String((Number(r.quoted_usd_per_unit ?? 0) || 0) * (Number(r.amount ?? 0) || 0)),
+        } as Record<string, unknown>),
+      ),
+      cursor: null,
+      total,
+    };
+  } catch (error) {
+    console.error('[admin] withdrawal queue failed', error);
+    return { rows: [], cursor: null, total: 0 };
   }
-
-  if (!isServerFirebaseReady()) return { rows: [], cursor: null, total: 0 };
-
-  let query = db().collection('withdrawals').orderBy('createdAt', 'desc').limit(limit + 1);
-
-  if (status === 'queue') {
-    query = db()
-      .collection('withdrawals')
-      .where('status', 'in', ['Pending', 'HeldForReview', 'Processing'])
-      .orderBy('createdAt', 'desc')
-      .limit(limit + 1);
-  } else if (status !== 'all') {
-    query = db()
-      .collection('withdrawals')
-      .where('status', '==', status)
-      .orderBy('createdAt', 'desc')
-      .limit(limit + 1);
-  }
-
-  if (options.cursor) {
-    const anchor = await db().doc(`withdrawals/${options.cursor}`).get();
-    if (anchor.exists) query = query.startAfter(anchor);
-  }
-
-  const snap = await query.get();
-  const docs = snap.docs.slice(0, limit);
-  const last = docs[docs.length - 1];
-
-  const total =
-    status === 'queue'
-      ? await countWhere('withdrawals', [['status', 'in', ['Pending', 'HeldForReview', 'Processing']]])
-      : status === 'all'
-        ? await countWhere('withdrawals')
-        : await countWhere('withdrawals', [['status', '==', status]]);
-
-  return {
-    rows: docs.map((doc) => adminWithdrawalRow(doc.id, doc.data() as Record<string, unknown>)),
-    cursor: snap.docs.length > limit && last ? last.id : null,
-    total,
-  };
 }
 
 /* ---- MODERATION ---------------------------------------------------------- */
@@ -539,24 +454,23 @@ export async function suspendUser(
   actorUid: string,
   untilIso?: string | null,
 ): Promise<void> {
-  await db().doc(`users/${uid}`).update({
-    suspended: true,
-    suspendedReason: reason,
-    suspendedUntil: untilIso ? new Date(untilIso) : null,
-    suspendedBy: actorUid,
-    suspendedAt: now(),
-    updatedAt: now(),
-  });
+  const { getServerSupabase } = await import('./supabase');
+  const { error } = await getServerSupabase().from('users').update({
+    suspended: true, suspended_reason: reason,
+    suspended_until: untilIso ?? null, suspended_by: actorUid,
+    suspended_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }).eq('id', uid);
+  if (error) throw error;
   await writeAudit({ actorUid, action: 'user.suspend', target: uid, detail: reason });
 }
 
 export async function unsuspendUser(uid: string, actorUid: string): Promise<void> {
-  await db().doc(`users/${uid}`).update({
-    suspended: false,
-    suspendedReason: null,
-    suspendedUntil: null,
-    updatedAt: now(),
-  });
+  const { getServerSupabase } = await import('./supabase');
+  const { error } = await getServerSupabase().from('users').update({
+    suspended: false, suspended_reason: null, suspended_until: null,
+    updated_at: new Date().toISOString(),
+  }).eq('id', uid);
+  if (error) throw error;
   await writeAudit({ actorUid, action: 'user.unsuspend', target: uid, detail: '' });
 }
 
@@ -629,42 +543,43 @@ export async function writeAudit(entry: {
   actorName?: string;
 }): Promise<void> {
   try {
-    await db().collection('auditLog').add({
+    const { supabaseInsertAudit } = await import('./data-supabase');
+    await supabaseInsertAudit({
       actorUid: entry.actorUid,
-      actorName: entry.actorName ?? entry.actorUid,
+      actorName: entry.actorName,
       action: entry.action,
       target: entry.target,
       detail: entry.detail,
-      createdAt: now(),
     });
   } catch (error) {
     console.error('[admin] audit write failed', error);
   }
 }
 
-export async function listAudit(limit = 50, cursor?: string | null): Promise<{ rows: AuditRow[]; cursor: string | null }> {
-  if (!isServerFirebaseReady()) return { rows: [], cursor: null };
-
-  let query = db().collection('auditLog').orderBy('createdAt', 'desc').limit(limit + 1);
-  if (cursor) {
-    const at = new Date(cursor);
-    if (!Number.isNaN(at.getTime())) query = query.startAfter(at);
-  }
-
-  const snap = await query.get();
-  const docs = snap.docs.slice(0, limit);
-  const rows: AuditRow[] = docs.map((doc) => ({
-    id: doc.id,
-    actorUid: str(doc.get('actorUid')),
-    actorName: str(doc.get('actorName'), str(doc.get('actorUid'))),
-    action: str(doc.get('action')),
-    target: str(doc.get('target')),
-    detail: str(doc.get('detail')),
-    at: isoOr(doc.get('createdAt')),
-  }));
-
-  const last = rows[rows.length - 1];
-  return { rows, cursor: snap.docs.length > limit && last ? last.at : null };
+/* `cursor` is kept in the signature so callers stay shape-compatible with the
+   paged database reader; the Supabase reader pages by `at` from the page tail. */
+export async function listAudit(limit = 50, _cursor?: string | null): Promise<{ rows: AuditRow[]; cursor: string | null }> {
+  const { supabaseListAudit } = await import('./data-supabase');
+  const rows = await supabaseListAudit(limit + 1);
+  const page = rows.slice(0, limit).map((r) => {
+    const raw = r.detail;
+    let detail = '';
+    if (typeof raw === 'string') {
+      try { detail = JSON.parse(raw); } catch { detail = raw; }
+    }
+    return {
+      id: String(r.id ?? ''),
+      actorUid: String(r.actor_uid ?? ''),
+      actorName: String(r.actor_name ?? r.actor_uid ?? ''),
+      action: String(r.action ?? ''),
+      target: String(r.target ?? ''),
+      detail: String(detail ?? ''),
+      at: r.created_at ? new Date(r.created_at as string).toISOString() : new Date().toISOString(),
+    };
+  });
+  const last = rows[limit - 1];
+  const lastAt = last?.created_at ? new Date(last.created_at as string).toISOString() : null;
+  return { rows: page, cursor: rows.length > limit ? lastAt : null };
 }
 
 /* ---- AD INVENTORY -------------------------------------------------------- */
@@ -680,30 +595,51 @@ export interface AdUnitRow {
 }
 
 export async function listAdUnits(): Promise<AdUnitRow[]> {
-  if (!isServerFirebaseReady()) return [];
-  const snap = await db().collection('adUnits').get();
-  return snap.docs.map((doc) => {
-    const data = doc.data();
-    return {
-      placement: doc.id,
-      kind: str(data.kind, 'html'),
-      network: str(data.network, '—'),
-      enabled: bool(data.enabled, true),
-      hasPayload: Boolean(data.html || data.src || data.url),
-      capPerSession: int(data.capPerSession),
-      updatedAt: iso(data.updatedAt),
-    };
-  });
+  const { supabaseListAdUnits } = await import('./data-supabase');
+  const rows = await supabaseListAdUnits();
+  return rows.map((r) => ({
+    placement: String(r.placement_id ?? ''),
+    kind: str(r.kind, 'html'),
+    network: str(r.network, '—'),
+    enabled: bool(r.enabled, true),
+    hasPayload: Boolean(r.html || r.src),
+    capPerSession: int(r.cap_per_session),
+    updatedAt: r.updated_at ? new Date(r.updated_at as string).toISOString() : null,
+  }));
 }
 
+/**
+ * The ad_units table keeps its own columns for the scalar fields and parks the
+ * rest of the editor payload (format, containerId, geo targeting, url) in the
+ * `json` text column as a JSON string — the renderer reads it back through
+ * getAdConfig.
+ */
 export async function saveAdUnit(
   placement: string,
   patch: Record<string, unknown>,
   actorUid: string,
 ): Promise<void> {
-  await db()
-    .doc(`adUnits/${placement}`)
-    .set({ ...patch, updatedAt: now(), updatedBy: actorUid }, { merge: true });
+  const { supabaseSaveAdUnit } = await import('./data-supabase');
+  const { kind, enabled, src, html, network, capPerSession, format, containerId, url, geo, ...rest } = patch;
+
+  const json: Record<string, unknown> = {};
+  if (format) json.format = format;
+  if (containerId) json.containerId = containerId;
+  if (url) json.url = url;
+  if (Array.isArray(geo)) json.geo = geo;
+  for (const [key, value] of Object.entries(rest)) {
+    if (value !== undefined && value !== null) json[key] = value;
+  }
+
+  await supabaseSaveAdUnit(placement, {
+    ...(kind !== undefined ? { kind: String(kind) } : {}),
+    ...(enabled !== undefined ? { enabled: enabled !== false } : {}),
+    ...(src !== undefined ? { src: String(src ?? '') } : {}),
+    ...(html !== undefined ? { html: String(html ?? '') } : {}),
+    ...(network !== undefined ? { network: String(network ?? '') } : {}),
+    ...(capPerSession !== undefined ? { cap_per_session: int(capPerSession) } : {}),
+    ...(Object.keys(json).length ? { json: JSON.stringify(json) } : {}),
+  });
   await writeAudit({
     actorUid,
     action: 'ads.unit.save',
@@ -713,11 +649,25 @@ export async function saveAdUnit(
 }
 
 export async function deleteAdUnit(placement: string, actorUid: string): Promise<void> {
-  await db().doc(`adUnits/${placement}`).delete();
+  const { supabaseDeleteAdUnit } = await import('./data-supabase');
+  await supabaseDeleteAdUnit(placement);
   await writeAudit({ actorUid, action: 'ads.unit.delete', target: placement, detail: '' });
 }
 
-/* ---- MODULE CATALOGUES (PTC, shortlinks, challenges, offerwall) ---------- */
+/* ---- MODULE CATALOGUES (PTC, shortlinks, challenges, offerwall) ----------
+   Logical names -> actual tables. The write path is permission-gated by the
+   route's whitelist; this map only translates names. */
+
+const CATALOGUE_TABLE: Record<string, string> = {
+  ptcAds: 'ptc_ads',
+  shortlinks: 'shortlinks',
+  challenges: 'challenges',
+  offerwallProviders: 'offerwall_providers',
+  coupons: 'coupons',
+  faq: 'faq',
+  legal: 'legal',
+  broadcasts: 'broadcasts',
+};
 
 export interface CatalogueRow {
   id: string;
@@ -727,22 +677,23 @@ export interface CatalogueRow {
 }
 
 export async function listCatalogue(collection: string, limit = 200): Promise<CatalogueRow[]> {
-  if (!isServerFirebaseReady()) return [];
-  const snap = await db().collection(collection).limit(limit).get();
-  return snap.docs.map((doc) => {
-    const data = doc.data() as Record<string, unknown>;
-    /* `createdAt` is destructured out and discarded on purpose: the editor round-
-       trips `fields` straight back into a write, and echoing a server timestamp
-       would overwrite the real creation time with a stale copy of itself. */
-    const { createdAt: _createdAt, updatedAt, ...fields } = data;
-    return {
-      id: doc.id,
-      enabled: bool(data.enabled, true),
-      fields,
-      updatedAt: iso(updatedAt),
-    };
-  });
+  const table = CATALOGUE_TABLE[collection];
+  if (!table) return [];
+  const { supabaseListCatalogue } = await import('./data-supabase');
+  return supabaseListCatalogue(table, limit);
 }
+
+/** camelCase editor field -> snake_case column, per catalogue. */
+const CATALOGUE_COLUMN: Record<string, Record<string, string>> = {
+  ptc_ads: { targetUrl: 'target_url', cooldownHours: 'cooldown_hours', dailyCap: 'daily_cap' },
+  shortlinks: { targetUrl: 'target_url', cooldownHours: 'cooldown_hours' },
+  challenges: {},
+  offerwall_providers: { urlTemplate: 'url_template' },
+  coupons: { maxRedemptions: 'max_redemptions', expiresAt: 'expires_at' },
+  faq: {},
+  legal: { effectiveAt: 'effective_at' },
+  broadcasts: { sentAt: 'sent_at' },
+};
 
 export async function upsertCatalogueItem(
   collection: string,
@@ -750,18 +701,27 @@ export async function upsertCatalogueItem(
   fields: Record<string, unknown>,
   actorUid: string,
 ): Promise<string> {
-  const ref = id ? db().doc(`${collection}/${id}`) : db().collection(collection).doc();
-  await ref.set(
-    { ...fields, updatedAt: now(), updatedBy: actorUid, ...(id ? {} : { createdAt: now() }) },
-    { merge: true },
-  );
+  const table = CATALOGUE_TABLE[collection];
+  if (!table) throw new Error(`Unknown catalogue "${collection}".`);
+
+  /* Translate the editor's camelCase payload into snake_case columns and drop
+     server-managed keys the client must never set. */
+  const map = CATALOGUE_COLUMN[table] ?? {};
+  const columned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (key === 'createdAt' || key === 'updatedAt' || key === 'updatedBy') continue;
+    columned[map[key] ?? key] = value;
+  }
+
+  const { supabaseUpsertCatalogue } = await import('./data-supabase');
+  const rowId = await supabaseUpsertCatalogue(table, id, columned);
   await writeAudit({
     actorUid,
     action: `${collection}.upsert`,
-    target: ref.id,
-    detail: str(fields.title ?? fields.name, ref.id),
+    target: rowId,
+    detail: str(fields.title ?? fields.name, rowId),
   });
-  return ref.id;
+  return rowId;
 }
 
 export async function deleteCatalogueItem(
@@ -769,7 +729,10 @@ export async function deleteCatalogueItem(
   id: string,
   actorUid: string,
 ): Promise<void> {
-  await db().doc(`${collection}/${id}`).delete();
+  const table = CATALOGUE_TABLE[collection];
+  if (!table) throw new Error(`Unknown catalogue "${collection}".`);
+  const { supabaseDeleteCatalogue } = await import('./data-supabase');
+  await supabaseDeleteCatalogue(table, id);
   await writeAudit({ actorUid, action: `${collection}.delete`, target: id, detail: '' });
 }
 
@@ -780,7 +743,8 @@ export async function saveConfig(
   patch: Record<string, unknown>,
   actorUid: string,
 ): Promise<void> {
-  await db().doc(`config/${section}`).set({ ...patch, updatedAt: now(), updatedBy: actorUid }, { merge: true });
+  const { supabaseUpsertConfig } = await import('./data-supabase');
+  await supabaseUpsertConfig(section, patch);
   await writeAudit({
     actorUid,
     action: `config.${section}.save`,
@@ -805,33 +769,20 @@ export interface AdminTicketRow {
 }
 
 export async function listTickets(options: { status?: string; limit?: number } = {}): Promise<AdminTicketRow[]> {
-  if (!isServerFirebaseReady()) return [];
-
-  let query = db().collection('tickets').orderBy('lastMessageAt', 'desc').limit(options.limit ?? 50);
-  if (options.status && options.status !== 'all') {
-    query = db()
-      .collection('tickets')
-      .where('status', '==', options.status)
-      .orderBy('lastMessageAt', 'desc')
-      .limit(options.limit ?? 50);
-  }
-
-  const snap = await query.get();
-  return snap.docs.map((doc) => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      uid: str(data.uid),
-      username: str(data.username, 'member'),
-      subject: str(data.subject),
-      category: str(data.category, 'Other'),
-      status: str(data.status, 'Open'),
-      unreadForSupport: bool(data.unreadForSupport),
-      assignedTo: data.assignedTo ? str(data.assignedTo) : null,
-      lastMessagePreview: str(data.lastMessagePreview),
-      updated: isoOr(data.lastMessageAt),
-    };
-  });
+  const { supabaseListTickets } = await import('./data-supabase');
+  const rows = await supabaseListTickets(options.status ?? 'all', options.limit ?? 50);
+  return rows.map((t) => ({
+    id: String(t.id ?? ''),
+    uid: String(t.user_id ?? ''),
+    username: String(t.username ?? 'member'),
+    subject: String(t.subject ?? ''),
+    category: String(t.category ?? 'Other'),
+    status: String(t.status ?? 'Open'),
+    unreadForSupport: t.unread_for_support === true,
+    assignedTo: t.assigned_to ? String(t.assigned_to) : null,
+    lastMessagePreview: String(t.last_message_preview ?? ''),
+    updated: t.last_message_at ? new Date(t.last_message_at as string).toISOString() : new Date().toISOString(),
+  }));
 }
 
 /* ---- FINANCE ------------------------------------------------------------- */
@@ -847,36 +798,32 @@ export interface FinanceSummary {
 }
 
 export async function getFinanceSummary(): Promise<FinanceSummary> {
-  const [rates, liability, pending, stats] = await Promise.all([
+  const [rates, liability, pending] = await Promise.all([
     getRates(),
     getLiabilityUsd(),
     pendingPayoutTotal(),
-    getPlatformStats(),
   ]);
 
   const byRail = new Map<string, { count: number; usd: number }>();
   const byCoin = new Map<string, { count: number; usd: number }>();
 
-  if (isServerFirebaseReady()) {
-    const snap = await db()
-      .collection('withdrawals')
-      .where('status', '==', 'Completed')
-      .orderBy('processedAt', 'desc')
-      .limit(500)
-      .get();
+  const { supabaseGetCompletedWithdrawals } = await import('./data-supabase');
+  const rows = await supabaseGetCompletedWithdrawals(500);
 
-    for (const doc of snap.docs) {
-      const usd = Number(str(doc.get('usdValue'), '0')) || 0;
-      const rail = str(doc.get('rail'), 'FaucetPay');
-      const coin = str(doc.get('coin'), 'USDT');
+  for (const r of rows) {
+    const perUnit = Number(r.quoted_usd_per_unit ?? 0) || 0;
+    const usd = perUnit * (Number(r.amount ?? 0) || 0);
+    const rail = str(r.rail, 'FaucetPay');
+    const coin = str(r.coin, 'USDT');
 
-      const railEntry = byRail.get(rail) ?? { count: 0, usd: 0 };
-      byRail.set(rail, { count: railEntry.count + 1, usd: railEntry.usd + usd });
+    const railEntry = byRail.get(rail) ?? { count: 0, usd: 0 };
+    byRail.set(rail, { count: railEntry.count + 1, usd: railEntry.usd + usd });
 
-      const coinEntry = byCoin.get(coin) ?? { count: 0, usd: 0 };
-      byCoin.set(coin, { count: coinEntry.count + 1, usd: coinEntry.usd + usd });
-    }
+    const coinEntry = byCoin.get(coin) ?? { count: 0, usd: 0 };
+    byCoin.set(coin, { count: coinEntry.count + 1, usd: coinEntry.usd + usd });
   }
+
+  const stats = await getPlatformStats();
 
   return {
     usdPerToken: rates.usdPerToken,
@@ -888,5 +835,3 @@ export async function getFinanceSummary(): Promise<FinanceSummary> {
     byCoin: [...byCoin.entries()].map(([coin, v]) => ({ coin, ...v })),
   };
 }
-
-export { FieldValue, num };

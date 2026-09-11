@@ -258,7 +258,7 @@ function AccountMenu() {
     setSigningOut(true);
     try {
       /* Sign out through the active backend's auth module: Supabase clears its
-         own httpOnly cookies client-side; Firebase posts DELETE to the session
+         own httpOnly cookies client-side; the app posts DELETE to the session
          route (revoking refresh tokens) and drops its SDK credential. */
       const { signOutEverywhere } = await getAuthApi();
       await signOutEverywhere();

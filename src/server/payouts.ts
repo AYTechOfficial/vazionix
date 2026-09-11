@@ -3,11 +3,12 @@ import 'server-only';
 import type { CoinTicker, PayoutRailName } from '@/lib/models';
 
 import { getRates } from './config';
-import { isSupabaseBackend } from '@/lib/backend';
-import { AppError, FieldValue, db, int, now, str } from './db';
+import { AppError, int, str } from './db';
 import { bumpStat } from './stats';
 import { pushNotification } from './users';
 import { refundLocked } from './withdraw';
+import { rpcSetWithdrawalStatus } from './supabase';
+import { supabaseGetWithdrawal, supabaseClaimWithdrawal, supabaseUpdateWithdrawal } from './data-supabase';
 
 /* ============================================================================
    PAYOUT RAILS — sending the money
@@ -17,7 +18,7 @@ import { refundLocked } from './withdraw';
    credentials — an unconfigured rail refuses rather than pretending to send.
 
      FaucetPay  live API, settles in seconds. Needs FAUCETPAY_API_KEY.
-     CWallet    live API, settles in seconds. Needs CWALLET_API_KEY (+ secret).
+     CWallet    live API, settles in seconds. Needs CWALLET_API_KEY.
      Direct     on-chain. Deliberately NOT automated here: signing keys do not
                 belong in a web app process. Approving a Direct payout marks it
                 Processing and records the operator; broadcast happens in your
@@ -25,8 +26,9 @@ import { refundLocked } from './withdraw';
 
    FAIL CLOSED, EVERY TIME
    A send that errors, times out, or returns an unrecognised body leaves the
-   withdrawal Pending and the tokens locked. It never marks Completed on
-   uncertainty. Paying twice is unrecoverable; paying late is a support reply.
+   withdrawal Pending/Processing and the tokens locked. It never marks Completed
+   on uncertainty. Paying twice is unrecoverable; paying late is a support
+   reply.
    ========================================================================== */
 
 export interface SendResult {
@@ -199,39 +201,34 @@ export async function approveWithdrawal(
   withdrawalId: string,
   actorUid: string,
 ): Promise<{ status: string; txid: string | null; detail: string }> {
-  const ref = db().doc(`withdrawals/${withdrawalId}`);
-  const snap = await ref.get();
-  if (!snap.exists) throw new AppError('Withdrawal not found.', 404, 'not_found');
+  const row = await supabaseGetWithdrawal(withdrawalId);
+  if (!row) throw new AppError404('Withdrawal not found.');
 
-  const data = snap.data() as Record<string, unknown>;
-  const status = str(data.status);
+  const status = str(row.status);
   if (status === 'Completed') {
-    return { status, txid: data.txid ? str(data.txid) : null, detail: 'Already completed.' };
+    return { status, txid: row.txid ? str(row.txid) : null, detail: 'Already completed.' };
   }
   if (status === 'Rejected' || status === 'Reversed') {
-    throw new AppError(`Cannot approve a ${status.toLowerCase()} withdrawal.`, 409, 'bad_state');
+    throw new AppError409(`Cannot approve a ${status.toLowerCase()} withdrawal.`);
   }
 
   /* Claim the withdrawal before calling out, so two operators clicking Approve
-     at the same moment cannot both send. */
-  await db().runTransaction(async (tx) => {
-    const fresh = await tx.get(ref);
-    if (str(fresh.get('status')) === 'Processing') {
-      throw new AppError('Another operator is already processing this payout.', 409, 'in_flight');
+     at the same moment cannot both send. Only a row still Pending/HeldForReview
+     transitions; a Processing row claims nobody and the RPC keeps it that way. */
+  const claim = await supabaseClaimWithdrawal(withdrawalId, actorUid);
+  if (!claim.claimed) {
+    const fresh = await supabaseGetWithdrawal(withdrawalId);
+    if (str(fresh?.status) === 'Completed') {
+      return { status: 'Completed', txid: fresh?.txid ? str(fresh.txid) : null, detail: 'Already completed.' };
     }
-    tx.update(ref, {
-      status: 'Processing',
-      reviewedBy: actorUid,
-      processingStartedAt: now(),
-      updatedAt: now(),
-    });
-  });
+    throw new AppError409('Another operator is already processing this payout.');
+  }
 
   const result = await sendPayout({
-    coin: str(data.coin, 'USDT') as CoinTicker,
-    rail: str(data.rail, 'FaucetPay') as PayoutRailName,
-    address: str(data.address),
-    amount: str(data.receiveAmount, str(data.amount, '0')),
+    coin: str(row.coin, 'USDT') as CoinTicker,
+    rail: str(row.rail, 'FaucetPay') as PayoutRailName,
+    address: str(row.address),
+    amount: str(row.receive_amount ?? row.amount, '0'),
     withdrawalId,
   });
 
@@ -245,9 +242,9 @@ export async function approveWithdrawal(
     return { status: 'Rejected', txid: null, detail: result.detail };
   }
 
-  /* Uncertain. Stay Processing with the tokens locked, and surface the reason to
-     the operator rather than guessing. */
-  await ref.update({ failureReason: result.detail, updatedAt: now() });
+  /* Uncertain. Stay Processing with the tokens locked, and surface the reason
+     to the operator rather than guessing. */
+  await supabaseUpdateWithdrawal(withdrawalId, { failure_reason: result.detail });
   return { status: 'Processing', txid: null, detail: result.detail };
 }
 
@@ -257,39 +254,25 @@ export async function settleWithdrawal(
   txid: string,
   actorUid: string,
 ): Promise<void> {
-  const ref = db().doc(`withdrawals/${withdrawalId}`);
-  const snap = await ref.get();
-  if (!snap.exists) throw new AppError('Withdrawal not found.', 404, 'not_found');
+  const row = await supabaseGetWithdrawal(withdrawalId);
+  if (!row) throw new AppError404('Withdrawal not found.');
+  if (str(row.status) === 'Completed') return;
 
-  const data = snap.data() as Record<string, unknown>;
-  if (str(data.status) === 'Completed') return;
+  const uid = str(row.user_id);
+  const tokens = int(row.token_cost);
+  const usd = Number(row.usd_value ?? 0) || 0;
 
-  const uid = str(data.uid);
-  const tokens = int(data.tokenCost);
-  const usd = Number(str(data.usdValue, '0')) || 0;
-
-  await db().runTransaction(async (tx) => {
-    tx.update(ref, {
-      status: 'Completed',
-      txid,
-      processedAt: now(),
-      reviewedBy: actorUid,
-      failureReason: null,
-      updatedAt: now(),
-    });
-    /* The locked tokens are now genuinely gone: they left the platform. */
-    tx.update(db().doc(`users/${uid}`), {
-      lockedBalance: FieldValue.increment(-tokens),
-      updatedAt: now(),
-    });
-  });
+  /* The RPC performs the status write AND the locked-balance release in one
+     transaction, so a completed payout can never leave locked tokens behind. */
+  const res = await rpcSetWithdrawalStatus({ id: withdrawalId, status: 'Completed', actor: actorUid, txid });
+  if (!res.ok) throw new AppError409(res.error ?? 'Could not settle the payout.');
 
   await bumpStat({ withdrawals: 1, tokensWithdrawn: tokens, usdWithdrawn: usd });
   await pushNotification(uid, {
     icon: 'checkCircle',
     tone: 'success',
     title: 'Withdrawal completed',
-    body: `${str(data.receiveAmount, str(data.amount))} ${str(data.coin)} sent.`,
+    body: `${str(row.receive_amount, str(row.amount))} ${str(row.coin)} sent.`,
     href: '/transactions',
   });
 }
@@ -299,66 +282,54 @@ export async function rejectWithdrawal(
   actorUid: string,
   reason: string,
 ): Promise<void> {
-  const ref = db().doc(`withdrawals/${withdrawalId}`);
-  const snap = await ref.get();
-  if (!snap.exists) throw new AppError('Withdrawal not found.', 404, 'not_found');
+  const row = await supabaseGetWithdrawal(withdrawalId);
+  if (!row) throw new AppError404('Withdrawal not found.');
 
-  const data = snap.data() as Record<string, unknown>;
-  const status = str(data.status);
+  const status = str(row.status);
   if (status === 'Rejected') return;
   if (status === 'Completed') {
-    throw new AppError('That payout already went out. Use a reversal instead.', 409, 'bad_state');
+    throw new AppError409('That payout already went out. Use a reversal instead.');
   }
 
-  await ref.update({
-    status: 'Rejected',
-    failureReason: reason,
-    reviewedBy: actorUid,
-    processedAt: now(),
-    updatedAt: now(),
+  const res = await rpcSetWithdrawalStatus({
+    id: withdrawalId, status: 'Rejected', actor: actorUid, failure: reason,
   });
+  if (!res.ok) throw new AppError409(res.error ?? 'Could not reject the payout.');
 
-  await refundLocked(str(data.uid), int(data.tokenCost), withdrawalId, reason);
-  await pushNotification(str(data.uid), {
+  const uid = str(row.user_id);
+  await refundLocked(uid, int(row.token_cost), withdrawalId, reason);
+  await pushNotification(uid, {
     icon: 'ticket',
     tone: 'warning',
     title: 'Withdrawal returned',
-    body: `${int(data.tokenCost).toLocaleString('en-US')} tokens are back in your balance. ${reason}`,
+    body: `${int(row.token_cost).toLocaleString('en-US')} tokens are back in your balance. ${reason}`,
     href: '/withdraw',
   });
 }
 
 /** USD value of everything currently queued, for the admin treasury card. */
 export async function pendingPayoutTotal(): Promise<{ count: number; usd: number; tokens: number }> {
-  if (isSupabaseBackend) {
-    const { supabaseQueuedWithdrawals } = await import('./data-supabase');
-    const rows = await supabaseQueuedWithdrawals(500);
-    let usd = 0;
-    let tokens = 0;
-    for (const row of rows) {
-      /* The Supabase row keeps the quote rather than a denormalised usdValue, so
-         the total is derived from the price the user was actually shown. */
-      const perUnit = Number(row.quoted_usd_per_unit ?? 0) || 0;
-      const amount = Number(row.amount ?? 0) || 0;
-      usd += perUnit * amount;
-      tokens += Number(row.token_cost ?? 0);
-    }
-    return { count: rows.length, usd, tokens };
-  }
-
-  const snap = await db()
-    .collection('withdrawals')
-    .where('status', 'in', ['Pending', 'HeldForReview', 'Processing'])
-    .limit(500)
-    .get();
-
+  const { supabaseQueuedWithdrawals } = await import('./data-supabase');
+  const rows = await supabaseQueuedWithdrawals(500);
   let usd = 0;
   let tokens = 0;
-  for (const doc of snap.docs) {
-    usd += Number(str(doc.get('usdValue'), '0')) || 0;
-    tokens += int(doc.get('tokenCost'));
+  for (const row of rows) {
+    /* The Supabase row keeps the quote rather than a denormalised usdValue, so
+       the total is derived from the price the user was actually shown. */
+    const perUnit = Number(row.quoted_usd_per_unit ?? 0) || 0;
+    const amount = Number(row.amount ?? 0) || 0;
+    usd += perUnit * amount;
+    tokens += Number(row.token_cost ?? 0);
   }
-  return { count: snap.size, usd, tokens };
+  return { count: rows.length, usd, tokens };
+}
+
+/* Small local error subclasses so the operator routes get precise statuses. */
+class AppError404 extends AppError {
+  constructor(message: string) { super(message, 404, 'not_found'); }
+}
+class AppError409 extends AppError {
+  constructor(message: string) { super(message, 409, 'bad_state'); }
 }
 
 export { getRates };

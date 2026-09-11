@@ -794,8 +794,8 @@ function ActionsTab({ user, role, perms }: UserDetailProps) {
         </CardHead>
         <div className="p-5 text-13 leading-body text-text-3">
           <p>
-            Permanent bans, GDPR hard-deletes, password resets and 2FA disablement need Firebase Auth writes
-            rather than Firestore writes, so they belong to a callable in{' '}
+            Permanent bans, GDPR hard-deletes, password resets and 2FA disablement need Supabase Auth writes
+            rather than table writes, so they belong to a server action in{' '}
             <code className="font-mono text-12">functions/</code> and no route exposes them yet.
           </p>
           <p className="mt-2">

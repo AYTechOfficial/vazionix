@@ -1,7 +1,7 @@
 import { handler, ok } from '@/server/http';
-import { isServerFirebaseReady } from '@/server/db';
 import { captchaEnabled, captchaProvider } from '@/lib/captcha/config';
 import { railStatus } from '@/server/payouts';
+import { isServerSupabaseReady } from '@/server/supabase';
 
 /* ============================================================================
    GET /api/health
@@ -14,9 +14,9 @@ import { railStatus } from '@/server/payouts';
    key is set, not what it is. A health endpoint that leaks which provider key is
    present is a fingerprinting gift; one that leaks the key is worse.
 
-   Unauthenticated on purpose, because a probe that needs a session cannot run from
-   a load balancer. That is also why it does not touch Firestore — a health check
-   that costs a document read per poll is a health check that shows up on the bill.
+   Unauthenticated on purpose, because a probe that needs a session cannot run
+   from a load balancer. That is also why it does not touch the database — a
+   health check that costs a query per poll shows up on the bill.
    ========================================================================== */
 
 export const runtime = 'nodejs';
@@ -26,9 +26,9 @@ export const GET = handler(async () => {
   const rails = railStatus();
 
   const config = {
-    firebaseAdmin: isServerFirebaseReady(),
-    firebaseClient: Boolean(
-      process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    supabaseServer: isServerSupabaseReady(),
+    supabaseClient: Boolean(
+      process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
     ),
     captcha: { enabled: captchaEnabled, provider: captchaProvider, secret: Boolean(process.env.CAPTCHA_SECRET_KEY) },
     payouts: {
@@ -41,10 +41,10 @@ export const GET = handler(async () => {
     siteUrl: Boolean(process.env.NEXT_PUBLIC_SITE_URL),
   };
 
-  /* Degraded rather than unhealthy when a rail is missing: the site earns and the
-     admin console works without a payout key, it just cannot send. Only missing
-     Firebase credentials make it genuinely unusable. */
-  const status = !config.firebaseAdmin || !config.firebaseClient ? 'unconfigured' : 'ok';
+  /* Degraded rather than unhealthy when a rail is missing: the site earns and
+     the admin console works without a payout key, it just cannot send. Only
+     missing Supabase credentials make it genuinely unusable. */
+  const status = !config.supabaseServer || !config.supabaseClient ? 'unconfigured' : 'ok';
 
   return ok({ status, config, at: new Date().toISOString() });
 });

@@ -49,12 +49,12 @@ export default async function HealthPage() {
 
   const integrations: Array<{ name: string; ok: boolean; detail: string }> = [
     {
-      name: 'Firebase Admin SDK',
+      name: 'Supabase (service role)',
       ok: users > 0 || withdrawals > 0 || audit > 0,
       detail:
         users > 0 || audit > 0
           ? `Reads are working — ${nf(users)} users, ${nf(audit)} audit rows.`
-          : 'No document has been read from any collection. Either the project is empty or FIREBASE_SERVICE_ACCOUNT_KEY is missing.',
+          : 'No rows have been read from any table. Either the project is empty or SUPABASE_SERVICE_ROLE_KEY is missing.',
     },
     {
       name: 'FaucetPay',

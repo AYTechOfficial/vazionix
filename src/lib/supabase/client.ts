@@ -7,7 +7,7 @@ import { isSupabaseConfigured } from './config';
    ----------------------------------------------------------------------------
    Client-side Supabase access via the publishable key (safe to expose). Used
    only for the signed-in user's own profile read and auth session — the same
-   one-grant model as the Firebase SessionProvider. The service_role key never
+   one-grant model as the session provider. The service_role key never
    imports here.
    ========================================================================== */
 

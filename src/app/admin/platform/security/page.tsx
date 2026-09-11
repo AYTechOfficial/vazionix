@@ -79,8 +79,8 @@ export default async function SecurityPage() {
       label: 'Data-layer permission checks',
       state: 'Always on',
       ok: true,
-      where: 'firestore.rules → hasPerm()',
-      note: 'Survives a caller who skips this server entirely and hits the Firestore REST API with a stolen token.',
+      where: 'RLS on the money tables → service-role only',
+      note: 'Survives a caller who skips this server entirely and hits the PostgREST API with a stolen key.',
     },
     {
       label: 'IP allowlist for staff',

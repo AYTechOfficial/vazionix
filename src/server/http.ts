@@ -12,7 +12,7 @@ import { AppError } from './db';
    thirty files and get subtly wrong in one of them:
 
    1. TURNS `AppError` INTO A CLEAN 4xx. Anything else becomes a 500 with a
-      generic message and a server-side log. A Firestore error string in a toast
+      generic message and a server-side log. A raw database error string in a toast
       tells a user nothing and tells an attacker something.
    2. RESOLVES THE CLIENT IP once, from the headers the CDN actually sets. Every
       anti-fraud check and every captcha verification needs it.
@@ -106,15 +106,11 @@ export function handler<P extends Record<string, string> = Record<string, string
         return fail(error.message, error.status, error.code, error.extra);
       }
 
-      /* Firebase Admin errors carry useful codes but also internal detail. Map
-         the two that users can act on, and swallow the rest. */
-      const code = (error as { code?: string })?.code ?? '';
-      if (code === 'auth/id-token-expired' || code === 'auth/session-cookie-expired') {
-        return fail('Your session expired. Sign in again.', 401, 'session_expired');
-      }
-      if (code === 'permission-denied') {
-        return fail('You do not have access to that.', 403, 'forbidden');
-      }
+      /* Supabase/Postgres errors carry machine codes (23505 unique violation,
+         PGRST116 not-found, 42501 RLS denial) but also internal detail. Map
+         nothing here — the callers already translate what a user can act on
+         (ledger.ts maps 23505 to "already claimed", guard.ts maps denials to
+         403), and swallowing the rest keeps internals out of responses. */
 
       console.error('[api] unhandled error', error);
       return fail('Something went wrong on our side. Try again.', 500, 'internal');

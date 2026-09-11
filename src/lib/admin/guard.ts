@@ -1,12 +1,7 @@
 import 'server-only';
 
-import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
-import { cookies as cookieNames } from '@/lib/brand';
-import { isSupabaseBackend } from '@/lib/backend';
-
-import { readAdminClaims, type AdminClaims, type DecodedTokenLike } from './claims';
 import { canWithGrants, PERM_META, ROLES, type AdminRole, type Permission } from './rbac';
 
 /* ============================================================================
@@ -22,54 +17,24 @@ import { canWithGrants, PERM_META, ROLES, type AdminRole, type Permission } from
    devtools open can flip it, and anyone with `curl` never loaded it at all.
 
    `requirePermission()` in this file is the check that stops a request. It:
-     1. reads the httpOnly session cookie the browser cannot script,
-     2. verifies it server-side with the Admin SDK against Google's keys, with
-        `checkRevoked: true` so a revoked session dies immediately,
-     3. reads the role from the VERIFIED token's custom claims — never from a
-        header, a query parameter, a request body, or a mirror document,
-     4. redirects or 403s if the permission is missing.
+     1. verifies the Supabase session server-side (supabase.auth.getUser()
+        against the httpOnly cookie — a signature check, not a payload read),
+     2. reads the role from public.staff, a table whose RLS denies every role
+        but service_role — which only the server holds. Never from a header,
+        a query parameter, a request body, or anything the caller can write,
+     3. redirects or 403s if the permission is missing.
 
-   And even this is not the last line. A caller who never touches our server —
-   hitting the Firestore REST API with a stolen ID token — bypasses this file
-   entirely. That is why the same permission is re-checked in firestore.rules.
-   Three layers, deliberately:
-
-     Client gate        cosmetic       stops nobody, helps everybody
-     THIS FILE          server-side    stops a browser
-     Rules              data-side      stops a client that skipped the server
-
-   NO DEMO MODE. An earlier revision of this file fabricated a signed-in
-   super_admin whenever the Firebase config was absent, so the console could be
-   reviewed without a project. That is gone. A console that lets you in without
-   a verified credential is a console that will eventually do it somewhere it
-   matters. With no credentials configured, `/admin` redirects to the staff
-   login and stays there.
-   ============================================================================ */
-
-export const SESSION_COOKIE = cookieNames.session;
-
-/**
- * A NON-httpOnly hint cookie carrying only the role string.
- *
- * It exists for one reason: Next middleware runs on the Edge runtime, where
- * `firebase-admin` (Node crypto, JWKS fetching, a long-lived key cache) cannot
- * run, so middleware cannot verify a Firebase session cookie. It can only
- * answer "does this request even claim to be staff?" cheaply, so an anonymous
- * visitor gets a clean redirect instead of a rendered shell.
- *
- * IT IS NOT A CREDENTIAL AND IS NEVER TRUSTED. Forging it gets you past
- * middleware and straight into `requirePermission()`, which reads the real,
- * signed session cookie and refuses. Treat it exactly like a `?role=` query
- * parameter you happened to find on the request.
- */
-export const ROLE_HINT_COOKIE = cookieNames.adminRole;
+   NO DEMO MODE. A console that lets you in without a verified credential is a
+   console that will eventually do it somewhere it matters. With no credentials
+   configured, `/admin` redirects to the staff login and stays there.
+   ========================================================================== */
 
 export interface AdminSession {
   uid: string;
   email: string | null;
-  claims: AdminClaims;
+  claims: { role: AdminRole; perms?: readonly Permission[] };
   role: AdminRole;
-  /** Display name from `/staff/{uid}`, when there is one. */
+  /** Display name from `public.staff`, when there is one. */
   name: string;
   /** Effective per-user permission override, if any. */
   perms?: readonly Permission[] | undefined;
@@ -82,98 +47,40 @@ export interface AdminSession {
  * outcome, not an exception.
  */
 export async function getAdminSession(): Promise<AdminSession | null> {
-  /* ---- SUPABASE BACKEND -------------------------------------------------
-     The verified credential is the Supabase session (httpOnly auth cookies,
-     validated server-side by supabase.auth.getUser()). The ROLE is then read
-     from `public.staff`, a table no client can read or write — RLS denies every
-     role but service_role, which only the server holds. So the role still comes
-     from a trusted store the caller cannot influence, exactly as the custom
-     claim did; only the storage moved. */
-  if (isSupabaseBackend) {
-    const { getSessionClaims } = await import('@/server/session');
-    const session = await getSessionClaims();
-    if (!session) return null;
+  const { getSessionClaims } = await import('@/server/session');
+  const session = await getSessionClaims();
+  if (!session) return null;
 
-    const { supabaseGetStaff } = await import('@/server/data-supabase');
-    let staff: Record<string, unknown> | null = null;
-    try {
-      staff = await supabaseGetStaff(session.uid);
-    } catch {
-      return null;
-    }
-    if (!staff) return null; // authenticated, but not staff
-
-    const role = String(staff.role ?? '') as AdminRole;
-    if (!ROLES[role]) return null;
-
-    /* MFA stays mandatory for staff, and is recorded per staff row on this
-       backend. STAFF_REQUIRE_MFA=false is for enrolling the first admin only. */
-    const requireMfa = (process.env.STAFF_REQUIRE_MFA ?? 'true') !== 'false';
-    if (requireMfa && staff.mfa !== true) return null;
-
-    const perms = Array.isArray(staff.perms) ? (staff.perms as Permission[]) : undefined;
-    return {
-      uid: session.uid,
-      email: session.email,
-      name:
-        (typeof staff.name === 'string' && staff.name.trim()) ||
-        session.email?.split('@')[0] ||
-        session.uid,
-      role,
-      claims: { role, ...(perms ? { perms } : {}) } as AdminClaims,
-      perms,
-    };
-  }
-
-  const cookieStore = await cookies();
-  const cookie = cookieStore.get(SESSION_COOKIE)?.value;
-  if (!cookie) return null;
-
-  // Dynamic import keeps `firebase-admin` out of any bundle that merely imports
-  // the types from this module.
-  const { getAdminAuth } = await import('@/lib/firebase/admin');
-
-  let decoded: DecodedTokenLike;
+  const { supabaseGetStaff } = await import('@/server/data-supabase');
+  let staff: Record<string, unknown> | null = null;
   try {
-    /* `checkRevoked: true` is the whole point of a session cookie over a bearer
-       ID token. It costs one round-trip and it is what makes "revoke this
-       admin's sessions" mean something within seconds rather than within an
-       hour. */
-    decoded = (await getAdminAuth().verifySessionCookie(cookie, true)) as unknown as DecodedTokenLike;
+    staff = await supabaseGetStaff(session.uid);
   } catch {
-    return null; // expired, revoked, or forged
+    return null;
   }
+  if (!staff) return null; // authenticated, but not staff
 
-  const claims = readAdminClaims(decoded);
-  if (!claims) return null; // authenticated, but not staff
+  const role = String(staff.role ?? '') as AdminRole;
+  if (!ROLES[role]) return null;
 
-  /* MFA is mandatory for staff. A staff token that somehow lacks it is treated
-     as not-staff rather than as a warning. Set STAFF_REQUIRE_MFA=false only
-     while enrolling the very first admin account, then remove it. */
+  /* MFA stays mandatory for staff, and is recorded per staff row. Set
+     STAFF_REQUIRE_MFA=false only while enrolling the very first admin, then
+     remove it. */
   const requireMfa = (process.env.STAFF_REQUIRE_MFA ?? 'true') !== 'false';
-  if (requireMfa && decoded['mfa'] !== true) return null;
+  if (requireMfa && staff.mfa !== true) return null;
 
+  const perms = Array.isArray(staff.perms) ? (staff.perms as Permission[]) : undefined;
   return {
-    uid: decoded.uid,
-    email: decoded.email ?? null,
-    name: await staffName(decoded.uid, decoded.email ?? null),
-    role: claims.role,
-    claims,
-    perms: claims.perms,
+    uid: session.uid,
+    email: session.email,
+    name:
+      (typeof staff.name === 'string' && staff.name.trim()) ||
+      session.email?.split('@')[0] ||
+      session.uid,
+    role,
+    claims: { role, ...(perms ? { perms } : {}) },
+    perms,
   };
-}
-
-/** Display name from `/staff/{uid}`, falling back to the email local part. */
-async function staffName(uid: string, email: string | null): Promise<string> {
-  try {
-    const { getAdminDb } = await import('@/lib/firebase/admin');
-    const snap = await getAdminDb().doc(`staff/${uid}`).get();
-    const value = snap.exists ? snap.get('name') : null;
-    if (typeof value === 'string' && value.trim()) return value;
-  } catch {
-    // A missing staff record is cosmetic; the role came from the verified token.
-  }
-  return email?.split('@')[0] ?? uid;
 }
 
 export class PermissionDeniedError extends Error {

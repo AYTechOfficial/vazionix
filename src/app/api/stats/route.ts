@@ -8,7 +8,7 @@ import { getPlatformStats, getPayoutTicker } from '@/server/stats';
    page's live counters poll, and what any external status page can read.
 
    Cached rather than no-store: these are aggregate counters, identical for every
-   visitor, and a homepage that issues a fresh Firestore read per visitor is the
+   visitor, and a homepage that issues a fresh database read per visitor is the
    first thing to fall over under a traffic spike.
    ========================================================================== */
 

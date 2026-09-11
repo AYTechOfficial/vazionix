@@ -8,17 +8,17 @@ import type { Permission } from '@/lib/admin/rbac';
    POST   /api/admin/catalogue/[collection]        create or update an item
    DELETE /api/admin/catalogue/[collection]?id=…   remove one
    ----------------------------------------------------------------------------
-   The five editable catalogues behind the earning surfaces. The collection name
-   arrives in the URL, so it is WHITELISTED rather than validated by shape — an
-   unchecked collection name in a path is a write primitive against any document in
-   the database, including `/users` and `/config`.
+   The editable catalogues behind the earning and content surfaces. The
+   collection name arrives in the URL, so it is WHITELISTED rather than validated
+   by shape — an unchecked collection name in a path is a write primitive against
+   any table in the database, including `users` and `config`.
 
    Each catalogue carries the permission of the module it belongs to, so somebody
-   who can edit PTC campaigns cannot silently reprice shortlinks.
+   who can edit PTC campaigns cannot silently reprice shortlinks or edit legal.
 
-   A coupon's document id IS its code, upper-cased, which is what makes redemption
-   a single read and stops two coupons sharing a code. That is enforced here rather
-   than left to the caller.
+   A coupon's id IS its code, upper-cased, which is what makes redemption a single
+   read and stops two coupons sharing a code. That is enforced here rather than
+   left to the caller.
    ========================================================================== */
 
 export const runtime = 'nodejs';
@@ -30,6 +30,9 @@ const CATALOGUES: Record<string, { perm: Permission; label: string; idFromCode?:
   offerwallProviders: { perm: 'earn.provider', label: 'Offerwall provider' },
   challenges: { perm: 'earn.edit', label: 'Challenge' },
   coupons: { perm: 'coupon.manage', label: 'Coupon', idFromCode: true },
+  faq: { perm: 'content.edit', label: 'FAQ entry' },
+  legal: { perm: 'content.edit', label: 'Legal document' },
+  broadcasts: { perm: 'broadcast.send', label: 'Broadcast' },
 };
 
 const STRIP = new Set(['id', 'createdAt', 'updatedAt', 'updatedBy', 'redeemed', 'viewsDelivered']);
