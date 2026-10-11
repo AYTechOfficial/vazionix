@@ -78,8 +78,8 @@ export async function supabaseGetCooldown(uid: string, kind: string): Promise<{ 
     .maybeSingle();
   if (error) throw error;
   return {
-    nextAt: data?.next_at ? new Date(data.next_at).toISOString() : null,
-    claims: data?.claims ?? 0,
+    nextAt: data?.next_at ? new Date(String(data.next_at)).toISOString() : null,
+    claims: Number(data?.claims ?? 0),
   };
 }
 
@@ -603,6 +603,7 @@ export async function supabaseInsertTicket(row: Record<string, unknown>): Promis
   const supabase = bc();
   const { data, error } = await supabase.from('tickets').insert(row).select('id').single();
   if (error) throw error;
+  if (!data) throw new Error('Ticket insert returned no id.');
   return String(data.id);
 }
 
@@ -835,7 +836,7 @@ export async function supabaseListCatalogue(
   const supabase = bc();
   const { data, error } = await supabase.from(table).select('*').limit(limit);
   if (error) throw error;
-  return (data ?? []).map((row) => {
+  return (data ?? []).map((row: Record<string, unknown>) => {
     const r = row as Record<string, unknown>;
     const { id, enabled, updated_at, created_at: _created, ...fields } = r;
     return {

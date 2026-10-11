@@ -94,7 +94,7 @@ export async function getLotteryState(uid: string | null): Promise<LotteryState>
      well as the ones still pending. */
   if (uid) {
     const rows = await supabaseListMyTickets(uid, 50);
-    myTickets = rows.map((d) => ({
+    myTickets = rows.map((d: Record<string, unknown>) => ({
       id: String(d.ticket_id ?? d.id ?? ''),
       status: (String(d.status ?? 'Pending') as LotteryTicket['status']),
       at: d.created_at ? new Date(d.created_at as string).toISOString() : new Date().toISOString(),
@@ -270,7 +270,7 @@ export async function drawLottery(actorUid: string): Promise<{ round: string; wi
   /* Everything not drawn loses; done in chunks so one UPDATE per batch stays
      inside a comfortable URL length for any round size. */
   const losers = ordered.slice(perWinner > 0 ? winnerCount : 0);
-  const loserIds = losers.map((row) => int(row.id));
+  const loserIds = losers.map((row: Record<string, unknown>) => int(row.id));
   for (let i = 0; i < loserIds.length; i += 500) {
     const { error: updateError } = await supabase
       .from('lottery_tickets')

@@ -14,9 +14,9 @@
  * Absolute origin, normalised. Never ends with a slash and ALWAYS carries a
  * scheme.
  *
- * The scheme is forced because a schemeless value is the easy mistake — Vercel's
- * own dashboard shows you `vazionix.vercel.app`, so that is what people paste in.
- * `new URL('vazionix.vercel.app')` throws `ERR_INVALID_URL`, and because
+ * The scheme is forced because a schemeless value is the easy mistake — Catalyst's
+ * own dashboard shows you `vazionix.onslate.eu`, so that is what people paste in.
+ * `new URL('vazionix.onslate.eu')` throws `ERR_INVALID_URL`, and because
  * `metadataBase` in the root layout is a `new URL(brand.url)`, that throw happens
  * during `next build`'s page-data collection: the whole deploy fails with an error
  * that names `/_not-found` and never mentions the variable that caused it.

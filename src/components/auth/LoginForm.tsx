@@ -87,11 +87,8 @@ export function LoginForm() {
   if (!isSupabaseConfigured) {
     return (
       <Alert tone="warning" icon={AlertTriangle}>
-        Supabase is not configured, so sign-in is unavailable. Copy{' '}
-        <code className="font-mono text-12">.env.example</code> to{' '}
-        <code className="font-mono text-12">.env.local</code> and fill in the{' '}
-        <code className="font-mono text-12">NEXT_PUBLIC_SUPABASE_*</code>{' '}
-        values.
+        Native authentication is not configured, so sign-in is unavailable. Configure the BootKeep database
+        connection and <code className="font-mono text-12">NEXT_PUBLIC_SITE_URL</code> in the deployment environment.
       </Alert>
     );
   }

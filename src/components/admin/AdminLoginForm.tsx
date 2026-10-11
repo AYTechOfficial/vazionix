@@ -107,11 +107,8 @@ export function AdminLoginForm({ next }: { next: string }) {
 
         {!isSupabaseConfigured ? (
           <Alert tone="danger" className="mb-5">
-            Supabase is not configured, so nobody can sign in. Set the{' '}
-            <code className="font-mono text-12">NEXT_PUBLIC_SUPABASE_*</code>{' '}
-            values and{' '}
-            <code className="font-mono text-12">SUPABASE_SERVICE_ROLE_KEY</code>, then bootstrap the first
-            admin.
+            Native authentication is not configured, so nobody can sign in. Set the BootKeep PostgreSQL
+            connection variables, then bootstrap the first admin.
           </Alert>
         ) : null}
 

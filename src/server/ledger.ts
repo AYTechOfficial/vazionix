@@ -227,14 +227,14 @@ export async function listLedger(
   });
   const hasMore = rows.length > limit;
   const docs = rows.slice(0, limit);
-  const entries: LedgerEntry[] = docs.map((d) => ({
+  const entries: LedgerEntry[] = docs.map((d: Record<string, unknown>) => ({
     id: String(d.id ?? ''),
     source: (d.source ?? 'bonus') as ClaimSource,
-    amount: d.amount ?? 0,
-    exp: d.exp ?? 0,
+    amount: Number(d.amount ?? 0),
+    exp: Number(d.exp ?? 0),
     refId: d.ref_id ? String(d.ref_id) : null,
-    label: d.label ? String(d.label) : SOURCE_LABEL[d.source ?? 'bonus'] ?? 'Credit',
-    at: d.created_at ? new Date(d.created_at).toISOString() : new Date().toISOString(),
+    label: d.label ? String(d.label) : SOURCE_LABEL[String(d.source ?? 'bonus') as ClaimSource] ?? 'Credit',
+    at: d.created_at ? new Date(String(d.created_at)).toISOString() : new Date().toISOString(),
   }));
   const last = entries[entries.length - 1];
   return { entries, cursor: hasMore && last ? last.at : null };
@@ -260,10 +260,10 @@ export async function earningsByDay(
   const { supabaseEarningsByDay } = await import('./data-supabase');
   const rows = await supabaseEarningsByDay(uid, daysN);
   for (const r of rows) {
-    const key = r.day ? String(r.day) : (r.created_at ? new Date(r.created_at).toISOString().slice(0, 10) : '');
+    const key = r.day ? String(r.day) : (r.created_at ? new Date(String(r.created_at)).toISOString().slice(0, 10) : '');
     const bucket = buckets.get(key);
     if (!bucket) continue;
-    const amount = r.amount ?? 0;
+    const amount = Number(r.amount ?? 0);
     if (amount <= 0) continue;
     switch (String(r.source)) {
       case 'faucet': bucket.faucet += amount; break;

@@ -6,11 +6,11 @@ so sign-up, login, faucet claims, withdrawals and the admin console all work aga
 - **Backend:** Supabase (Postgres + Auth) — project `zlabpwyezgdbylogbcxm`, migrations applied.
 - **Hosting:** Catalyst **Slate**, Zoho's Node.js service — the only Catalyst service that runs a
   Next.js App Router app natively (standalone build, `ZC` runtime headers, no Docker needed).
-- **App root:** the `vie-faucet-next` folder. The repo root holds the old HTML prototype, not the
-  app — run every command from `vie-faucet-next`.
+- **App root:** the `vazionix` folder. The repo root holds the old HTML prototype, not the
+  app — run every command from `vazionix`.
 
 ```powershell
-cd "F:\New Developemnts\vie-faucet-redesign-full\vie-faucet-next"
+cd "F:\New Developemnts\vie-faucet-redesign-full\vazionix"
 ```
 
 ---
@@ -119,7 +119,7 @@ starts. The build itself is allowed 2 GB regardless of the serving memory.
 
 ## 4. Deploy to Catalyst Slate
 
-Install the CLI once (`npm i -g zcatalyst-cli`), then from `vie-faucet-next`:
+Install the CLI once (`npm i -g zcatalyst-cli`), then from `vazionix`:
 
 ```bash
 catalyst login                     # opens a browser sign-in

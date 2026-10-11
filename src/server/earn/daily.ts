@@ -132,7 +132,7 @@ function challengeKey(id: string, repeat: string): string {
 
 export async function listChallenges(uid: string | null): Promise<ChallengeItem[]> {
   const list = await supabaseListChallenges();
-  const rows = list.map((r) => ({ id: String(r.id), data: r as Record<string, unknown> }));
+  const rows = list.map((r: Record<string, unknown>) => ({ id: String(r.id), data: r as Record<string, unknown> }));
   if (!rows.length) return [];
 
   let user: Record<string, unknown> = {};
@@ -147,11 +147,11 @@ export async function listChallenges(uid: string | null): Promise<ChallengeItem[
     /* The idempotency key IS the challenge claim id, so a claimed challenge is
        one whose key appears in the ledger. */
     claimedIds = new Set(
-      (claims ?? []).map((c) => String(c.client_request_id ?? '')).filter(Boolean),
+      (claims ?? []).map((c: Record<string, unknown>) => String(c.client_request_id ?? '')).filter(Boolean),
     );
   }
 
-  return rows.map(({ id, data }) => {
+  return rows.map(({ id, data }: { id: string; data: Record<string, unknown> }) => {
     const kind = (str(data.kind, 'faucet') as ChallengeItem['kind']);
     const of = int(data.target, 1);
     const at = uid ? Math.min(of, PROGRESS_FIELD[kind]?.(user) ?? 0) : 0;

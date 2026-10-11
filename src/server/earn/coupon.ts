@@ -123,7 +123,7 @@ export async function redeemCoupon(args: {
 /** A user's own redemption history, for the coupon page table. */
 export async function listRedemptions(uid: string, limit = 25): Promise<CouponRow[]> {
   const rows = await supabaseListClaims(uid, { limit, source: 'coupon', cursorIso: null });
-  return rows.slice(0, limit).map((d) => ({
+  return rows.slice(0, limit).map((d: Record<string, unknown>) => ({
     id: String(d.id ?? ''),
     code: d.ref_id ? String(d.ref_id) : '—',
     balance: Number(d.amount ?? 0),

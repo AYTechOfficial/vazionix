@@ -26,10 +26,8 @@ export const GET = handler(async () => {
   const rails = railStatus();
 
   const config = {
-    supabaseServer: isServerSupabaseReady(),
-    supabaseClient: Boolean(
-      process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-    ),
+    database: isServerSupabaseReady(),
+    auth: isServerSupabaseReady(),
     captcha: { enabled: captchaEnabled, provider: captchaProvider, secret: Boolean(process.env.CAPTCHA_SECRET_KEY) },
     payouts: {
       faucetPay: rails.FaucetPay.configured,
@@ -44,7 +42,7 @@ export const GET = handler(async () => {
   /* Degraded rather than unhealthy when a rail is missing: the site earns and
      the admin console works without a payout key, it just cannot send. Only
      missing Supabase credentials make it genuinely unusable. */
-  const status = !config.supabaseServer || !config.supabaseClient ? 'unconfigured' : 'ok';
+  const status = !config.database || !config.auth ? 'unconfigured' : 'ok';
 
   return ok({ status, config, at: new Date().toISOString() });
 });

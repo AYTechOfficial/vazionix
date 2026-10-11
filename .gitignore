@@ -42,3 +42,9 @@ yarn-error.log*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Catalyst local project link (user-specific)
+.catalystrc
+
+# Local migration upload artifact
+vazionix-migrations.sql

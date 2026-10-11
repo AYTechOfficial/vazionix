@@ -244,7 +244,7 @@ export async function listUsers(options: {
     return { rows: [], cursor: null, total: 0 };
   }
 
-  const rows = (data ?? []).map((r) =>
+  const rows = (data ?? []).map((r: Record<string, unknown>) =>
     userRow(String(r.id), {
       ...r,
       usernameLower: r.username_lower,
@@ -331,14 +331,14 @@ export async function getUserDetail(uid: string): Promise<AdminUserDetail | null
     claimCounts: (data.claimCounts ?? {}) as Record<string, number>,
     suspendedReason: data.suspendedReason ? String(data.suspendedReason) : null,
     signupIp: data.signupIp ? String(data.signupIp) : null,
-    recentClaims: claimRows.slice(0, 50).map((c) => ({
+    recentClaims: claimRows.slice(0, 50).map((c: Record<string, unknown>) => ({
       id: String(c.id ?? ''),
       source: String(c.source ?? ''),
       amount: Number(c.amount ?? 0),
       label: String(c.label ?? c.ref_id ?? c.source ?? ''),
       at: c.created_at ? new Date(c.created_at as string).toISOString() : new Date().toISOString(),
     })),
-    withdrawals: wdRows.map((r) =>
+    withdrawals: wdRows.map((r: Record<string, unknown>) =>
       adminWithdrawalRow(String(r.id), {
         ...r, uid: r.user_id, countryCode: r.country_code, receiveAmount: r.receive_amount,
         tokenCost: r.token_cost, createdAt: r.created_at, processedAt: r.processed_at,
@@ -346,14 +346,14 @@ export async function getUserDetail(uid: string): Promise<AdminUserDetail | null
         usdValue: String((Number(r.quoted_usd_per_unit ?? 0) || 0) * (Number(r.amount ?? 0) || 0)),
       } as Record<string, unknown>),
     ),
-    referrals: refRows.map((d) => ({
+    referrals: refRows.map((d: Record<string, unknown>) => ({
       uid: String(d.referred_user_id ?? ''),
       username: String(d.username ?? 'member'),
       level: Number(d.level ?? 1),
       qualified: d.qualified === true,
       joined: d.joined_at ? new Date(d.joined_at as string).toISOString() : new Date().toISOString(),
     })),
-    tickets: ticketRows.map((t) => ({
+    tickets: ticketRows.map((t: Record<string, unknown>) => ({
       id: String(t.id ?? ''),
       subject: String(t.subject ?? 'Support'),
       status: String(t.status ?? 'Open'),
@@ -421,7 +421,7 @@ export async function listWithdrawalQueue(options: {
     ]);
 
     return {
-      rows: rows.map((r) =>
+      rows: rows.map((r: Record<string, unknown>) =>
         adminWithdrawalRow(String(r.id), {
           ...r,
           uid: r.user_id,
@@ -561,7 +561,7 @@ export async function writeAudit(entry: {
 export async function listAudit(limit = 50, _cursor?: string | null): Promise<{ rows: AuditRow[]; cursor: string | null }> {
   const { supabaseListAudit } = await import('./data-supabase');
   const rows = await supabaseListAudit(limit + 1);
-  const page = rows.slice(0, limit).map((r) => {
+  const page = rows.slice(0, limit).map((r: Record<string, unknown>) => {
     const raw = r.detail;
     let detail = '';
     if (typeof raw === 'string') {
@@ -597,7 +597,7 @@ export interface AdUnitRow {
 export async function listAdUnits(): Promise<AdUnitRow[]> {
   const { supabaseListAdUnits } = await import('./data-supabase');
   const rows = await supabaseListAdUnits();
-  return rows.map((r) => ({
+  return rows.map((r: Record<string, unknown>) => ({
     placement: String(r.placement_id ?? ''),
     kind: str(r.kind, 'html'),
     network: str(r.network, '—'),
@@ -771,7 +771,7 @@ export interface AdminTicketRow {
 export async function listTickets(options: { status?: string; limit?: number } = {}): Promise<AdminTicketRow[]> {
   const { supabaseListTickets } = await import('./data-supabase');
   const rows = await supabaseListTickets(options.status ?? 'all', options.limit ?? 50);
-  return rows.map((t) => ({
+  return rows.map((t: Record<string, unknown>) => ({
     id: String(t.id ?? ''),
     uid: String(t.user_id ?? ''),
     username: String(t.username ?? 'member'),

@@ -41,9 +41,9 @@ export default async function KeysPage() {
 
   const rows: KeyRow[] = [
     {
-      env: 'SUPABASE_SERVICE_ROLE_KEY',
-      purpose: 'Service-role client — every server read and write in src/server/**',
-      set: has('SUPABASE_SERVICE_ROLE_KEY'),
+      env: 'BOOTKEEP_DB_PASSWORD',
+      purpose: 'Native PostgreSQL connection — every server read and write in src/server/**',
+      set: has('BOOTKEEP_DB_PASSWORD') || has('DATABASE_URL'),
       consequence: 'Nothing works. Every page falls back to empty data and no privileged action can run.',
     },
     {
@@ -85,7 +85,7 @@ export default async function KeysPage() {
   ];
 
   const missing = rows.filter((r) => !r.set);
-  const critical = missing.filter((r) => r.env === 'SUPABASE_SERVICE_ROLE_KEY').length;
+  const critical = missing.filter((r) => r.env === 'BOOTKEEP_DB_PASSWORD').length;
 
   return (
     <ScaffoldPage
@@ -114,8 +114,8 @@ export default async function KeysPage() {
     >
       {critical ? (
         <Alert tone="danger">
-          <strong>SUPABASE_SERVICE_ROLE_KEY is not set.</strong> The service-role client cannot start, so every
-          read returns empty and no privileged action can run. Nothing else on this list matters until it is.
+          <strong>BOOTKEEP_DB_PASSWORD or DATABASE_URL is not set.</strong> The native PostgreSQL client cannot
+          start, so every read returns empty and no privileged action can run. Nothing else on this list matters until it is.
         </Alert>
       ) : null}
 

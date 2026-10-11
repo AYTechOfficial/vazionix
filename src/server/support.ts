@@ -38,7 +38,7 @@ export async function listUserTickets(uid: string, limit = 50): Promise<SupportT
 
   /* One query for every message across the user's tickets, then grouped in
      memory: a handful of tickets makes N+1 queries pointless overhead. */
-  const ids = tickets.map((t) => String(t.id));
+  const ids = tickets.map((t: Record<string, unknown>) => String(t.id));
   const messages = await supabaseListTicketMessages(ids);
   const byTicket = new Map<string, TicketMessage[]>();
   for (const m of messages) {
@@ -54,7 +54,7 @@ export async function listUserTickets(uid: string, limit = 50): Promise<SupportT
     byTicket.set(String(m.ticket_id), list);
   }
 
-  return tickets.map((t) => ({
+  return tickets.map((t: Record<string, unknown>) => ({
     id: String(t.id),
     subject: String(t.subject ?? 'Support request'),
     category: String(t.category ?? 'Other'),

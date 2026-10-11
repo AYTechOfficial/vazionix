@@ -1,25 +1,10 @@
 import 'server-only';
 
 import { cache } from 'react';
-
-import { getSsrSupabase } from '@/lib/supabase/server';
 import type { Viewer } from '@/lib/models';
-
 import { forbidden, unauthorized } from './db';
-
-/* ============================================================================
-   SESSION
-   ----------------------------------------------------------------------------
-   The browser holds one credential: the httpOnly, encrypted Supabase auth
-   cookies written by @supabase/ssr on sign-in. Server Components and Route
-   Handlers read the session from those cookies via getSsrSupabase() and verify
-   it with supabase.auth.getUser() — a server-side signature check against
-   Supabase's auth server, not a decode-and-trust.
-
-   Server-side mutations that must bypass RLS (the money path) use the
-   service-role client in src/server/supabase.ts, keyed by the VERIFIED user id
-   from here. The browser never holds the service-role key.
-   ========================================================================== */
+import { getCurrentNativeUser, clearSession, SESSION_COOKIE } from './auth-native';
+import { cookies } from 'next/headers';
 
 export interface SessionClaims {
   uid: string;
@@ -32,64 +17,37 @@ export interface SessionClaims {
   advertiser: boolean;
 }
 
-function claimsFromUser(user: {
-  id: string;
-  email?: string | null;
-  email_confirmed_at?: string | null;
-  user_metadata?: Record<string, unknown> | null;
-}): SessionClaims {
-  return {
-    uid: user.id,
-    email: user.email ?? null,
-    emailVerified: Boolean(user.email_confirmed_at),
-    name: typeof user.user_metadata?.username === 'string' ? user.user_metadata.username : null,
-    admin: false, // resolved per request from public.staff in the admin guard
-    adminRole: null,
-    support: false,
-    advertiser: false,
-  };
-}
-
-/** Sign out: clear the Supabase cookies from the server side. */
 export async function destroySession(): Promise<void> {
-  const supabase = await getSsrSupabase();
-  await supabase.auth.signOut();
+  const store = await cookies();
+  const raw = store.get(SESSION_COOKIE)?.value ?? null;
+  await clearSession(raw);
+  store.delete(SESSION_COOKIE);
 }
 
-/* ---- READ ---------------------------------------------------------------- */
-
-/**
- * Current viewer's claims, or null. Memoised per request, so a layout, a page
- * and three components all reading the session cost one verification.
- */
 export const getSessionClaims = cache(async (): Promise<SessionClaims | null> => {
   try {
-    const supabase = await getSsrSupabase();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getCurrentNativeUser();
     if (!user) return null;
-    return claimsFromUser(user);
+    return {
+      uid: user.id,
+      email: user.email,
+      emailVerified: Boolean(user.emailVerifiedAt),
+      name: user.username,
+      admin: false,
+      adminRole: null,
+      support: false,
+      advertiser: false,
+    };
   } catch {
     return null;
   }
 });
 
-/** Claims plus display fields, for headers and avatars. */
 export const getViewer = cache(async (): Promise<Viewer | null> => {
   const claims = await getSessionClaims();
   if (!claims) return null;
-
   const username = claims.name ?? claims.email?.split('@')[0] ?? 'member';
-  return {
-    uid: claims.uid,
-    email: claims.email,
-    emailVerified: claims.emailVerified,
-    username,
-    initials: initialsFor(username),
-    admin: claims.admin,
-    adminRole: claims.adminRole,
-  };
+  return { uid: claims.uid, email: claims.email, emailVerified: claims.emailVerified, username, initials: initialsFor(username), admin: claims.admin, adminRole: claims.adminRole };
 });
 
 export function initialsFor(name: string): string {
@@ -100,8 +58,6 @@ export function initialsFor(name: string): string {
   return cleaned.slice(0, 2).toUpperCase();
 }
 
-/* ---- GUARDS -------------------------------------------------------------- */
-
 export async function requireUser(): Promise<SessionClaims> {
   const claims = await getSessionClaims();
   if (!claims) throw unauthorized();
@@ -110,9 +66,7 @@ export async function requireUser(): Promise<SessionClaims> {
 
 export async function requireVerifiedUser(): Promise<SessionClaims> {
   const claims = await requireUser();
-  if (!claims.emailVerified) {
-    throw forbidden('Verify your email address first — check your inbox for the link.');
-  }
+  if (!claims.emailVerified) throw forbidden('Verify your email address first — check your inbox for the link.');
   return claims;
 }
 
