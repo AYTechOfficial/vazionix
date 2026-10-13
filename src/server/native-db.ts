@@ -12,7 +12,12 @@ type SingleResult = { data: Row | null; error: NativeDbError | null; count?: num
 type Order = { column: string; ascending: boolean };
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
-const SAFE_COLUMNS = /^[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*|\s*\([^)]*\))?$/;
+/* A projection is a comma-separated list of plain (optionally qualified)
+   identifiers, each optionally carrying a parenthesised argument list such as
+   count(*) — nothing else may reach the SQL string. The list must allow more
+   than two columns: the ledger reads four at once. */
+const COLUMN_ITEM = '[A-Za-z_][A-Za-z0-9_]*(?:\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*)?(?:\\s*\\([^)]*\\))?';
+const SAFE_COLUMNS = new RegExp(`^${COLUMN_ITEM}(?:\\s*,\\s*${COLUMN_ITEM})*$`);
 
 function identifier(value: string): string {
   if (!IDENTIFIER.test(value)) throw new Error(`Unsafe database identifier: ${value}`);
@@ -87,6 +92,7 @@ class QueryBuilder {
   private anyFilterGroups: FilterGroup[] = [];
   private ordering: Order[] = [];
   private maxRows: number | null = null;
+  private maybe = false;
   private projection = '*';
   private countMode = false;
   private head = false;
@@ -137,7 +143,11 @@ class QueryBuilder {
   order(column: string, options?: { ascending?: boolean }): this { this.ordering.push({ column: identifier(column), ascending: options?.ascending !== false }); return this; }
   limit(value: number): this { this.maxRows = Math.max(0, Math.trunc(value)); return this; }
   single(): Promise<SingleResult> { this.maxRows = 1; return this.executeSingle(); }
-  maybeSingle(): Promise<SingleResult> { this.maxRows = 1; return this.executeSingle(); }
+  /* Supabase semantics: maybeSingle() resolves { data: null, error: null } when no
+     row matches, and only single() reports a missing row as an error. Code in this
+     app is written against those semantics — e.g. an account with no cooldown row
+     yet — so the distinction has to survive the shim. */
+  maybeSingle(): Promise<SingleResult> { this.maxRows = 1; this.maybe = true; return this.executeSingle(); }
 
   then<TResult1 = ListResult, TResult2 = never>(
     onfulfilled?: ((value: ListResult) => TResult1 | PromiseLike<TResult1>) | null,
@@ -201,7 +211,10 @@ class QueryBuilder {
       const select = this.countMode ? 'COUNT(*)::int AS count' : this.head ? '1' : this.projection;
       const result = await query(`SELECT ${select} FROM ${this.table}${where}${order}${limit}`, values);
       if (this.countMode) return { data: this.head ? null : result.rows, error: null, count: Number(result.rows[0]?.count ?? 0) };
-      if (this.maxRows === 1 && result.rows.length === 0) return { data: null, error: new NativeDbError('No rows found.', { code: 'PGRST116' }) };
+      if (this.maxRows === 1 && result.rows.length === 0) {
+        if (this.maybe) return { data: null, error: null };
+        return { data: null, error: new NativeDbError('No rows found.', { code: 'PGRST116' }) };
+      }
       const rows = result.rows as Row[];
       return { data: this.maxRows === 1 ? (rows[0] ?? null) : rows, error: null };
     }
