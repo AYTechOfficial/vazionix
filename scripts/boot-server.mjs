@@ -39,8 +39,10 @@ function serveApp() {
 
 function buildThenRestart() {
   const placeholder = createServer((_req, res) => {
-    res.writeHead(503, { 'Content-Type': 'text/plain' });
-    res.end('Vazionix is building — try again shortly.');
+    /* Must answer 2xx: BotKeep's startup probe treats error responses as a
+       failed start and kills the container even though the port is bound. */
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Vazionix is building — the real server starts in a moment.');
   });
   placeholder.listen(PORT, HOST, () => log(`placeholder listening on ${HOST}:${PORT}; starting build`));
 
