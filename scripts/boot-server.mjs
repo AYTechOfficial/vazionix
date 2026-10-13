@@ -48,13 +48,14 @@ function buildThenRestart() {
 
   const build = spawn('npm', ['run', 'build'], { stdio: 'inherit' });
   build.on('exit', (code) => {
-    placeholder.close();
-    if (code === 0) {
-      log('build finished; exiting so BotKeep restarts into the built server');
-      process.exit(0);
+    if (code !== 0) {
+      log(`build failed with code=${code}; exiting nonzero`);
+      process.exit(code ?? 1);
     }
-    log(`build failed with code=${code}; exiting nonzero`);
-    process.exit(code ?? 1);
+    log('build finished; handing the port over to next start in this same process');
+    /* A clean exit reads as "stopped" to BotKeep — it does not restart us.
+       So the wrapper never exits: it closes the placeholder and serves. */
+    placeholder.close(() => serveApp());
   });
 }
 
