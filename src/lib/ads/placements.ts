@@ -120,6 +120,29 @@ export type PlacementId =
   | 'withdraw.top'
   | 'withdraw.rail'
   | 'withdraw.belowCard'
+  /* -- Raisen (ad inventory showcase page) --------------------------------- */
+  | 'raisen.top'
+  | 'raisen.leaderboard1'
+  | 'raisen.largeLeaderboard'
+  | 'raisen.banner468'
+  | 'raisen.rectangle1'
+  | 'raisen.largeRectangle1'
+  | 'raisen.halfPage'
+  | 'raisen.skyscraper'
+  | 'raisen.square'
+  | 'raisen.smallSquare'
+  | 'raisen.rectangle2'
+  | 'raisen.largeRectangle2'
+  | 'raisen.inFeed1'
+  | 'raisen.inFeed2'
+  | 'raisen.native1'
+  | 'raisen.native2'
+  | 'raisen.video'
+  | 'raisen.leaderboard2'
+  | 'raisen.banner468b'
+  | 'raisen.rectangle3'
+  | 'raisen.halfPage2'
+  | 'raisen.bottom'
   /* -- Global, non-spatial ------------------------------------------------- */
   | 'global.anchor'
   | 'global.socialBar'
@@ -256,6 +279,30 @@ export const PLACEMENTS: Placement[] = [
   p('withdraw.top', 'Withdraw', 'Above the page header', 'leaderboard', 'mobileLarge', 'Above the header only — never inline with payout controls.'),
   p('withdraw.rail', 'Withdraw', 'Right rail, beside history', 'rectangle', 'mobileRectangle'),
   p('withdraw.belowCard', 'Withdraw', 'Below the entire transaction card', 'largeRectangle', 'mobileRectangle'),
+
+  /* ---- Raisen (ad inventory showcase) ------------------------------------ */
+  p('raisen.top', 'Raisen', 'Top of the showcase page', 'billboard', 'mobileLarge'),
+  p('raisen.leaderboard1', 'Raisen', 'Full-width row 1', 'leaderboard', 'mobileLarge'),
+  p('raisen.largeLeaderboard', 'Raisen', 'Full-width row 2', 'largeLeaderboard', 'mobileLarge'),
+  p('raisen.banner468', 'Raisen', 'Legacy banner row', 'banner', 'mobileBanner'),
+  p('raisen.rectangle1', 'Raisen', 'Rectangle grid, cell 1', 'rectangle', 'mobileRectangle'),
+  p('raisen.largeRectangle1', 'Raisen', 'Rectangle grid, cell 2', 'largeRectangle', 'mobileRectangle'),
+  p('raisen.halfPage', 'Raisen', 'Rail column, slot 1', 'halfPage', 'mobileRectangle'),
+  p('raisen.skyscraper', 'Raisen', 'Rail column, slot 2', 'skyscraper', 'mobileRectangle'),
+  p('raisen.square', 'Raisen', 'Square grid, cell 1', 'square', 'mobileRectangle'),
+  p('raisen.smallSquare', 'Raisen', 'Square grid, cell 2', 'smallSquare', 'mobileRectangle'),
+  p('raisen.rectangle2', 'Raisen', 'Rectangle grid, cell 3', 'rectangle', 'mobileRectangle'),
+  p('raisen.largeRectangle2', 'Raisen', 'Rectangle grid, cell 4', 'largeRectangle', 'mobileRectangle'),
+  p('raisen.inFeed1', 'Raisen', 'In-feed native row, slot 1', 'inFeed', 'inFeed'),
+  p('raisen.inFeed2', 'Raisen', 'In-feed native row, slot 2', 'inFeed', 'inFeed'),
+  p('raisen.native1', 'Raisen', 'Native banner row, slot 1', 'native', 'native'),
+  p('raisen.native2', 'Raisen', 'Native banner row, slot 2', 'native', 'native'),
+  p('raisen.video', 'Raisen', 'Outstream video block', 'video', 'video'),
+  p('raisen.leaderboard2', 'Raisen', 'Full-width row 3', 'leaderboard', 'mobileLarge'),
+  p('raisen.banner468b', 'Raisen', 'Legacy banner row, slot 2', 'banner', 'mobileBanner'),
+  p('raisen.rectangle3', 'Raisen', 'Rectangle grid, cell 5', 'rectangle', 'mobileRectangle'),
+  p('raisen.halfPage2', 'Raisen', 'Rail column, slot 3', 'halfPage', 'mobileRectangle'),
+  p('raisen.bottom', 'Raisen', 'Page footer', 'leaderboard', 'mobileLarge'),
 
   /* ---- Global ------------------------------------------------------------ */
   p('global.anchor', 'Global', 'Sticky bottom of viewport', 'anchor', 'anchor', 'Dismissible. Persists across navigation.'),
