@@ -1,18 +1,36 @@
 import 'server-only';
 
-import { getNativeDb, isNativeDbReady } from './native-db';
+import { createClient } from '@supabase/supabase-js';
 
-/*
- * Compatibility name retained while the application moves off Supabase.
- * Callers receive a native PostgreSQL repository with the same small surface
- * they already use (`from(...).select/insert/update/...` and `rpc`).
- */
+/* ============================================================================
+   SUPABASE SERVER CLIENT
+   ----------------------------------------------------------------------------
+   Server-side Supabase access. Uses the service_role key, which FULLY BYPASSES
+   RLS — every row policy below assumes that and guards the code paths instead.
+
+   SECURITY: this key must NEVER carry a NEXT_PUBLIC_ prefix (it would ship to
+   the browser bundle). It lives only in src/server and Edge Functions.
+   ========================================================================== */
+
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+
+/** True when Supabase credentials are present. */
 export function isServerSupabaseReady(): boolean {
-  return isNativeDbReady();
+  return Boolean(url && serviceRoleKey && serviceRoleKey !== 'service_role <paste-your-service-role-jwt-here>');
 }
 
+/** The service-role client. Throws a loud, named error if misconfigured so a
+    silent auth failure can't look like a working-but-empty backend. */
 export function getServerSupabase() {
-  return getNativeDb();
+  if (!isServerSupabaseReady()) {
+    throw new Error(
+      '[supabase] NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set (server-only)',
+    );
+  }
+  return createClient(url, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 }
 
 /* ---- LEDGER RPC BRIDGE -------------------------------------------------- */

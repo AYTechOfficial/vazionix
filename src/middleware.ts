@@ -68,9 +68,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  /* Native auth uses one opaque, httpOnly session cookie. This is only a
-     presence check — the page behind middleware verifies it against PostgreSQL. */
-  const hasSession = Boolean(request.cookies.get('vazionix_session')?.value);
+  /* Supabase writes its own chunked `sb-<ref>-auth-token` cookies. This is only
+     a PRESENCE check — middleware runs on the Edge and verifies nothing; the
+     page behind it does the real verification. */
+  const hasSession = request.cookies
+    .getAll()
+    .some((c) => c.name.startsWith('sb-') && c.name.includes('auth-token'));
 
   if (!hasSession) {
     const url = request.nextUrl.clone();

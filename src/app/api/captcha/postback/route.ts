@@ -8,7 +8,7 @@ import { getEconomy } from '@/server/config';
    ----------------------------------------------------------------------------
    Configure in AdsLab → Website Settings → Captcha Postback:
 
-       https://vazionix-joszzezw.onslate.eu/api/captcha/postback
+       https://vazionixfaucet.vercel.app/api/captcha/postback
 
    SIGNATURE: hmac_sha256("<sub_id>:<timestamp>", secretKey) — an HMAC, NOT the
    plain sha256 the ad postback uses. The two schemes are verified by two separate

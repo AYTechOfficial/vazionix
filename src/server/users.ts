@@ -355,14 +355,14 @@ export async function pushNotification(
 export async function listNotifications(uid: string, limit = 20): Promise<AppNotification[]> {
   const { supabaseListNotifications } = await import('./data-supabase');
   const rows = await supabaseListNotifications(uid, limit);
-  return rows.map((d: Record<string, unknown>) => ({
+  return rows.map((d) => ({
     id: String(d.id ?? ''),
     icon: (String(d.icon ?? 'coins') as AppNotification['icon']),
     tone: (String(d.tone ?? 'info') as AppNotification['tone']),
     title: String(d.title ?? ''),
     body: String(d.body ?? ''),
     href: d.href ? String(d.href) : null,
-    at: d.created_at ? new Date(String(d.created_at)).toISOString() : new Date().toISOString(),
+    at: d.created_at ? new Date(d.created_at).toISOString() : new Date().toISOString(),
     unread: !d.read,
   }));
 }

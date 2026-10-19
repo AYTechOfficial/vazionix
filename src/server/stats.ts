@@ -111,7 +111,7 @@ export const getPayoutTicker = cache(async (limit = 12): Promise<PayoutTickerRow
   const { supabaseGetCompletedWithdrawals } = await import('./data-supabase');
   try {
     const rows = await supabaseGetCompletedWithdrawals(limit);
-    return rows.map((d: Record<string, unknown>) => {
+    return rows.map((d) => {
       const u = typeof d.username === 'string' ? d.username : 'member';
       return {
         username: u,
@@ -150,7 +150,7 @@ export async function getDailySeries(days = 30): Promise<DailyStatRow[]> {
   const { supabaseGetDailyStats } = await import('./data-supabase');
   try {
     const rows = await supabaseGetDailyStats(days);
-    return rows.map((d: Record<string, unknown>) => ({
+    return rows.map((d) => ({
       day: String(d.day ?? ''),
       members: num(d.members_today),
       claims: num(d.claims),

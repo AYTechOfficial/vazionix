@@ -11,7 +11,7 @@ import {
    ----------------------------------------------------------------------------
    Configure in AdsLab → Website Settings → Postback URL, BASE ONLY:
 
-       https://vazionix-joszzezw.onslate.eu/api/adslab/postback
+       https://vazionixfaucet.vercel.app/api/adslab/postback
 
    Do not append query parameters there; AdsLab adds them.
 

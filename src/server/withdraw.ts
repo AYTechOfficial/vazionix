@@ -426,7 +426,7 @@ function rowToWithdrawalDoc(row: Record<string, unknown>): Record<string, unknow
 export async function listWithdrawals(uid: string, limit = 25): Promise<WithdrawalRecord[]> {
   const { supabaseListWithdrawals } = await import('./data-supabase');
   const rows = await supabaseListWithdrawals(uid, limit);
-  return rows.map((d: Record<string, unknown>) => ({
+  return rows.map((d) => ({
     id: String(d.id ?? ''),
     coin: (String(d.coin ?? 'USDT') as CoinTicker),
     rail: (String(d.rail ?? 'FaucetPay') as PayoutRailName),
@@ -449,7 +449,7 @@ export async function listWithdrawals(uid: string, limit = 25): Promise<Withdraw
 export async function listAddresses(uid: string): Promise<SavedAddress[]> {
   const { supabaseListAddresses } = await import('./data-supabase');
   const rows = await supabaseListAddresses(uid);
-  return rows.map((d: Record<string, unknown>) => ({
+  return rows.map((d) => ({
     id: String(d.id ?? ''),
     label: String(d.label ?? 'Saved address'),
     address: String(d.address ?? ''),

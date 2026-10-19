@@ -60,25 +60,12 @@ const nextConfig = {
     /* framer-motion and lucide-react both ship large barrel files; this rewrites
        `import { X } from 'lucide-react'` into a deep import at build time. */
     optimizePackageImports: ['lucide-react', 'framer-motion'],
-
-    /* BootKeep's Founder Free plan caps the app at ~2 GB and 150% CPU. Next's
-       build spawns one worker per core for type-checking and static
-       generation; on this box they spike past the memory limit and the
-       container is killed silently mid-build. One worker builds in about a
-       minute and stays far below the limits. */
-    cpus: 1,
   },
 
-  /* Linting during `next build` doubles the build's memory footprint for no
-     production value: `npm run lint` covers it in CI/dev. */
-  eslint: { ignoreDuringBuilds: true },
-
-  /* Type checking stays enforced by `npm run typecheck` (run it in CI and
-     locally; it passes on this commit). It is skipped inside `next build`
-     only because BotKeep's Founder Free container (2 GB / 150% CPU) is killed
-     silently while the build's type-check workers run — the app never gets to
-     serve. Set this back to `false` on any host with room to build. */
-  typescript: { ignoreBuildErrors: true },
+  /* The build must fail on a type error. A payouts product that ships one because
+     the build was told to ignore it is a payouts product that ships a wrong
+     balance. */
+  typescript: { ignoreBuildErrors: false },
 
   /* No `X-Powered-By: Next.js`: free information for an attacker, no value to us. */
   poweredByHeader: false,

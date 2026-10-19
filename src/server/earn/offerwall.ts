@@ -57,7 +57,7 @@ export async function listOfferProviders(viewer: {
   countryCode: string;
 } | null): Promise<OfferProviderItem[]> {
   const list = await supabaseListEnabled('offerwall_providers', 'rating', 50);
-  const rows: Array<{ id: string; data: Record<string, unknown> }> = list.map((r: Record<string, unknown>) => ({
+  const rows: Array<{ id: string; data: Record<string, unknown> }> = list.map((r) => ({
     id: String(r.id),
     // `url_template` is the column that holds the provider's wall URL.
     data: { ...r, iframeUrl: r.url_template ?? r.url },
@@ -91,7 +91,7 @@ export async function listConversions(
   limit = 50,
 ): Promise<OfferConversion[]> {
   const rows = await supabaseListConversions(uid, limit);
-  return rows.map((d: Record<string, unknown>) => ({
+  return rows.map((d) => ({
     id: String(d.id ?? ''),
     provider: String(d.provider ?? 'Provider'),
     status: (String(d.status ?? 'Pending') as OfferConversion['status']),

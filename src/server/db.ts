@@ -107,11 +107,10 @@ export const notFound = (message = 'Not found.') => new AppError(message, 404, '
 export const conflict = (message: string, code = 'conflict') => new AppError(message, 409, code);
 export const tooMany = (message: string, code = 'rate_limited') => new AppError(message, 429, code);
 
-/** True when the native BootKeep PostgreSQL connection is configured. */
+/** True when the server has the Supabase credentials it needs. */
 export function isServerDataReady(): boolean {
   return Boolean(
-    process.env.DATABASE_URL ||
-    ((process.env.BOOTKEEP_DB_HOST || process.env.SUPABASE_DB_HOST) &&
-      (process.env.BOOTKEEP_DB_PASSWORD || process.env.SUPABASE_DB_PASSWORD)),
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_DB_PASSWORD),
   );
 }

@@ -61,7 +61,7 @@ export async function getLeaderboard(
     const rows = await supabaseGetBoardEntries(board, Math.min(size, economy.leaderboard.size));
     const curve = economy.leaderboard.payoutCurveBps;
     const pool = economy.leaderboard.prizePoolPerBoard;
-    const list: LeaderboardRow[] = rows.map((data: Record<string, unknown>, index: number) => {
+    const list: LeaderboardRow[] = rows.map((data, index) => {
       const bps = curve[index] ?? 0;
       return {
         uid: String(data.user_id ?? ''),
@@ -142,11 +142,11 @@ function statusFor(lastActiveIso: string | null): ReferralRow['status'] {
 
 export async function getReferralSummary(uid: string): Promise<ReferralSummary> {
   const economy = await getEconomy();
-  const tiers: ReferralTier[] = economy.referrals.tiers.map((t: Record<string, unknown>) => ({
-    name: String(t.name ?? 'Bronze') as ReferralTier['name'],
-    at: Number(t.at ?? 0),
-    rate: Number(t.rate ?? 0),
-    perk: String(t.perk ?? ''),
+  const tiers: ReferralTier[] = economy.referrals.tiers.map((t) => ({
+    name: t.name,
+    at: t.at,
+    rate: t.rate,
+    perk: t.perk,
   }));
 
   const { supabaseGetUser, supabaseListReferrals } = await import('./data-supabase');
@@ -157,7 +157,7 @@ export async function getReferralSummary(uid: string): Promise<ReferralSummary> 
   const u = (userRow ?? {}) as Record<string, unknown>;
   const user = { ...u, referralCode: u.referral_code };
 
-  const rows: ReferralRow[] = refRows.map((d: Record<string, unknown>) => {
+  const rows: ReferralRow[] = refRows.map((d) => {
     const lastActive = d.last_active_at ? new Date(d.last_active_at as string).toISOString() : null;
     const joined = d.joined_at ? new Date(d.joined_at as string).toISOString() : new Date().toISOString();
     return {
@@ -213,7 +213,7 @@ export async function getReferralSummary(uid: string): Promise<ReferralSummary> 
 
 export async function getReferralTiers(): Promise<ReferralTier[]> {
   const economy = await getEconomy();
-  return economy.referrals.tiers.map((t: Record<string, unknown>) => ({ name: String(t.name ?? 'Bronze') as ReferralTier['name'], at: Number(t.at ?? 0), rate: Number(t.rate ?? 0), perk: String(t.perk ?? '') }));
+  return economy.referrals.tiers.map((t) => ({ name: t.name, at: t.at, rate: t.rate, perk: t.perk }));
 }
 
 /**
