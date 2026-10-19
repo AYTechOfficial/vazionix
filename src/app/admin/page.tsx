@@ -92,6 +92,18 @@ export default async function AdminOverviewPage() {
 
   const filledAds = adUnits.filter((u) => u.enabled && u.hasPayload).length;
 
+  /* Ad slots also auto-fill from AdsLab when no operator unit exists (see
+     AdUnit's fallback path): count the placements whose desktop format maps to
+     an AdsLab banner size, so the "filled" KPI reflects what actually renders
+     instead of only hand-pasted tags. */
+  const { adslabUnitForFormat } = await import('@/lib/adslab/config');
+  const placementsMod = await import('@/lib/ads/placements');
+  const adslabAutoFilled = placementsMod.PLACEMENTS.filter(
+    (placement) => !adUnits.some((u) => u.placement === placement.id && u.enabled && u.hasPayload) &&
+      adslabUnitForFormat(placement.format) !== null,
+  ).length;
+  const totalFilled = filledAds + adslabAutoFilled;
+
   /* ---- TRIAGE ------------------------------------------------------------- */
   const signals: Signal[] = [];
 
@@ -162,13 +174,13 @@ export default async function AdminOverviewPage() {
     });
   }
 
-  if (!filledAds) {
+  if (!totalFilled) {
     signals.push({
       sev: 'warning',
       perm: 'ads.edit',
       icon: AlertTriangle,
       title: 'No ad unit is filled',
-      body: `${INVENTORY_COUNT} placements are reserved and every one renders a placeholder. Advertising is the primary revenue surface.`,
+      body: `${INVENTORY_COUNT} placements are reserved and nothing is configured — fill inventory or connect Adsterra keys.`,
       href: '/admin/ads/inventory',
       cta: 'Fill inventory',
     });
@@ -231,9 +243,11 @@ export default async function AdminOverviewPage() {
     {
       perm: 'ads.view',
       label: 'Ad slots filled',
-      value: `${nf(filledAds)} / ${nf(INVENTORY_COUNT)}`,
-      sub: filledAds ? 'enabled and carrying a payload' : 'nothing is earning yet',
-      tone: filledAds ? 'default' : 'danger',
+      value: `${nf(totalFilled)} / ${nf(INVENTORY_COUNT)}`,
+      sub: filledAds
+        ? `${nf(filledAds)} manual + ${nf(adslabAutoFilled)} AdsLab auto-fill`
+        : `${nf(adslabAutoFilled)} auto-filled by AdsLab inventory`,
+      tone: totalFilled ? 'default' : 'danger',
     },
   ];
 

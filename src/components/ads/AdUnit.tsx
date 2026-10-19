@@ -6,8 +6,8 @@ import { cn } from '@/lib/utils';
 import { AD_FORMATS, formatDimensions, type AdFormatId } from '@/lib/ads/formats';
 import { getPlacement, type PlacementId } from '@/lib/ads/placements';
 import type { AdUnitConfig } from '@/lib/ads/config';
-import { adslabConfigured, adslabUnitForFormat } from '@/lib/adslab/config';
-import { AdslabBanner } from './AdslabBanner';
+import { adslabConfigured, adslabUnitForFormat, adsterraKeyForSize } from '@/lib/adslab/config';
+import { AdslabBanner, AdslabBannerWithFallback } from './AdslabBanner';
 import { useAds } from './AdProvider';
 
 /* ============================================================================
@@ -260,6 +260,10 @@ export function AdUnit({ placement, format: formatOverride, className, bare = fa
             title={`Advertisement — ${desktop.label}`}
           />
         ) : null
+      ) : adslabSize && adsterraKeyForSize(adslabSize) ? (
+        /* A same-size Adsterra banner is configured: render through the watcher
+           that promotes to it if the AdsLab loader leaves the box empty. */
+        <AdslabBannerWithFallback size={adslabSize} placement={placement} />
       ) : adslabSize ? (
         <AdslabBanner size={adslabSize} placement={placement} />
       ) : showPlaceholder ? (

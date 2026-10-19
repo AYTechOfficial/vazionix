@@ -63,6 +63,52 @@ export function adslabUnitForFormat(format: string): AdslabBannerSize | null {
 export const ADSLAB_SDK_URL = 'https://adslab.me/api/sdk.js';
 export const ADSLAB_BANNER_JS = 'https://serve.adslab.me/api/banner/js';
 
+/* ---- ADSTERRA FALLBACK ---------------------------------------------------
+   AdsLab occasionally no-fills a banner (thin inventory, geo, off-hours). An
+   Adsterra banner of the same size is configured per size via env keys
+   (NEXT_PUBLIC_ADSTERRA_728X90 and friends) and mounted only when AdsLab left
+   the container empty — a second network bidding on the same box, in strict
+   priority order, with no double-serving of the same impression.
+
+   Like every ad snippet it renders inside the sandboxed iframe (see
+   AdUnit.tsx), so it never sees the session cookie. */
+
+const ADSTERRA_KEYS: Record<string, string | undefined> = {
+  '728x90': process.env.NEXT_PUBLIC_ADSTERRA_728X90,
+  '468x60': process.env.NEXT_PUBLIC_ADSTERRA_468X60,
+  '300x250': process.env.NEXT_PUBLIC_ADSTERRA_300X250,
+  '336x280': process.env.NEXT_PUBLIC_ADSTERRA_336X280,
+  '300x600': process.env.NEXT_PUBLIC_ADSTERRA_300X600,
+  '160x600': process.env.NEXT_PUBLIC_ADSTERRA_160X600,
+  '320x50': process.env.NEXT_PUBLIC_ADSTERRA_320X50,
+  '320x100': process.env.NEXT_PUBLIC_ADSTERRA_320X100,
+  '250x250': process.env.NEXT_PUBLIC_ADSTERRA_250X250,
+  '200x200': process.env.NEXT_PUBLIC_ADSTERRA_200X200,
+};
+
+/** The configured Adsterra invoke key for a banner size, or null. The value is
+    the `key` from Adsterra's atOptions snippet; we rebuild the standard invoke
+    markup around it so operators paste one short value, not the whole tag. */
+export function adsterraKeyForSize(adslabSize: string): string | null {
+  const key = ADSTERRA_KEYS[adslabSize];
+  return key && key.trim() ? key.trim() : null;
+}
+
+/** Full Adsterra banner snippet (atOptions + invoke.js) for a size + key,
+    rendered inside the sandboxed iframe by AdUnit's fallback path. */
+export function adsterraSnippetForSize(adslabSize: string): string | null {
+  const key = adsterraKeyForSize(adslabSize);
+  if (!key) return null;
+  const x = adslabSize.indexOf('x');
+  const width = Number(adslabSize.slice(0, x));
+  const height = Number(adslabSize.slice(x + 1));
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  return `<script type="text/javascript">
+  atOptions = { key: '${key}', format: 'iframe', height: ${height}, width: ${width}, params: {} };
+</script>
+<script src="//www.highperformanceformat.com/${key}/invoke.js"></script>`;
+}
+
 /** Task categories the proxy will accept. Anything else is refused rather than
     forwarded, so a caller cannot use us as an open proxy to adslab.me. */
 export const ADSLAB_TASK_TYPES = [
