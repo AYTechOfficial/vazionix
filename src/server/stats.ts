@@ -69,17 +69,23 @@ export async function bumpStat(patch: StatPatch): Promise<void> {
  */
 export const getPlatformStats = cache(async (): Promise<PlatformStats> => {
   try {
-    const { supabaseGetStats, supabaseCountOnline } = await import('./data-supabase');
+    const { supabaseGetStats, supabaseCountOnline, supabaseCountWhere } = await import('./data-supabase');
     const today = new Date().toISOString().slice(0, 10);
-    const [global, todayRow, online] = await Promise.all([
+    const [global, todayRow, online, memberCount] = await Promise.all([
       supabaseGetStats('global'),
       supabaseGetStats(today),
       supabaseCountOnline(5),
+      /* LIVE COUNT, not the stored counter: the `stats.members` increment can
+         drift when profiles are restored, merged or removed outside a normal
+         signup, and a member count that lies on the register page costs trust
+         in every other number on the page. One cheap indexed COUNT per render
+         (cached with the page) is worth that. */
+      supabaseCountWhere('users'),
     ]);
     const g = global ?? {};
     const t = todayRow ?? {};
     return {
-      members: num(g.members),
+      members: memberCount > 0 ? memberCount : num(g.members),
       membersToday: num(t.members_today),
       claimsAllTime: num(g.claims),
       claimsToday: num(t.claims),
