@@ -48,3 +48,6 @@ yarn-error.log*
 
 # Local migration upload artifact
 vazionix-migrations.sql
+.admin-credentials.local.txt
+.admin-credentials.local.txt
+.shivika-recovery.local.txt
