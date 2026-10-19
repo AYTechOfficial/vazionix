@@ -65,6 +65,33 @@ export function AdminShell({
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
 
+  /* LIVE CONSOLE: an admin who leaves the command centre open is looking at a
+     monitor, not a screenshot. Refresh the server data every 60s while the tab
+     is visible (a hidden tab is skipped — background churn burns DB reads for
+     nobody). Pages with unsaved form state are out of scope: refresh only
+     re-renders server components, it never touches client-controlled inputs. */
+  const pendingForm = React.useRef(false);
+  React.useEffect(() => {
+    if (!identity) return;
+    const beforeUnloadGuard = (e: BeforeUnloadEvent) => {
+      if (pendingForm.current) e.preventDefault();
+    };
+    document.addEventListener('visibilitychange', beforeUnloadGuard, { once: false });
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      const el = document.activeElement;
+      const typing =
+        el instanceof HTMLElement &&
+        (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      if (typing) return; // do not yank the page from under an operator mid-edit
+      router.refresh();
+    }, 60_000);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', beforeUnloadGuard);
+    };
+  }, [identity, router]);
+
   const toggleCollapse = React.useCallback(() => {
     setCollapsed((c) => {
       const next = !c;

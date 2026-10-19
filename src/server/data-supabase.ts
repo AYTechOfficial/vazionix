@@ -143,6 +143,33 @@ export async function supabaseCountOnline(minutes: number): Promise<number> {
   return count ?? 0;
 }
 
+/** LIVE sum of every member's balance — the admin liability figure must be
+ *  derived from this, not from the drift-prone stored stats counters. Returns
+ *  the sum of `balance` across all rows of `users` (nulls treated as 0). */
+export async function supabaseSumUsersBalance(): Promise<number> {
+  const supabase = bc();
+  const { data, error } = await supabase.rpc('sum_user_balances');
+  if (!error && typeof data === 'number') return data;
+  /* The RPC may not exist on older deployments — fall back to paging rows.
+     1000 per page is the PostgREST default; a faucet's user table stays small
+     enough that even a few pages is cheaper than a wrong liability number. */
+  let sum = 0;
+  let from = 0;
+  for (;;) {
+    const { data: rows, error: pageError } = await supabase
+      .from('users')
+      .select('balance')
+      .range(from, from + 999);
+    if (pageError) throw pageError;
+    const page = rows ?? [];
+    if (!page.length) break;
+    for (const r of page) sum += Number((r as { balance?: number | null }).balance ?? 0);
+    if (page.length < 1000) break;
+    from += 1000;
+  }
+  return sum;
+}
+
 /** Completed withdrawals for the payout ticker, newest first. */
 export async function supabaseGetCompletedWithdrawals(limit = 12) {
   const supabase = bc();

@@ -174,12 +174,17 @@ export async function getDailySeries(days = 30): Promise<DailyStatRow[]> {
   }
 }
 
-/** Total USD value currently held by users, for the admin treasury screen. */
+/** Total USD value currently held by users, for the admin treasury screen.
+ *
+ * Computed LIVE from the users table, not from the stored `stats` counters:
+ * `credited - withdrawn` drifts whenever balances are adjusted, test data is
+ * removed or a ledger entry is reverse... the exact cases the liability figure
+ * exists to catch. The number on the treasury screen must equal the sum of the
+ * rows in `users`, because that sum IS the liability. */
 export async function getLiabilityUsd(): Promise<{ tokens: number; usd: number }> {
   const [rates, dataMod] = await Promise.all([getRates(), import('./data-supabase')]);
   try {
-    const global = (await dataMod.supabaseGetStats('global')) ?? {};
-    const outstanding = int(global.tokens_credited) - int(global.tokens_withdrawn);
+    const outstanding = await dataMod.supabaseSumUsersBalance();
     return { tokens: outstanding, usd: outstanding * rates.usdPerToken };
   } catch (error) {
     console.error('[stats] liability read failed', error);
