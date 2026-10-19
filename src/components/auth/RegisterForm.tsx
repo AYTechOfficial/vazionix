@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { AlertTriangle, Gift } from 'lucide-react';
 
 import { Alert } from '@/components/ui/Alert';
@@ -37,7 +37,6 @@ const MIN_PASSWORD = 10;
 
 export function RegisterForm() {
   const router = useRouter();
-  const params = useSearchParams();
 
   const [username, setUsername] = React.useState('');
   const [email, setEmail] = React.useState('');
@@ -49,16 +48,24 @@ export function RegisterForm() {
 
   /* The code can arrive on this page directly (`/register?r=abc`) or have been
      captured by middleware into a first-party cookie when the visitor landed.
-     Either way it is only ever a code — the server resolves it to a uid. */
+     Either way it is only ever a code — the server resolves it to a uid.
+
+     Read from `window.location.search` rather than `useSearchParams()`: the
+     search-params hook forces this component inside a Suspense boundary, and
+     React's streamed-boundary swap ($RC) never fires in some Chromium builds,
+     leaving the form in a hidden container. Location is enough here — the
+     value is only ever a code, and the cookie fallback below covers the
+     middleware-captured case. */
   React.useEffect(() => {
-    const fromQuery = params.get('r') ?? params.get('ref');
+    const search = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search);
+    const fromQuery = search.get('r') ?? search.get('ref');
     if (fromQuery) {
       setReferral(fromQuery);
       return;
     }
     const match = document.cookie.match(new RegExp(`(?:^|; )${brand.slug}-ref=([^;]*)`));
     if (match?.[1]) setReferral(decodeURIComponent(match[1]));
-  }, [params]);
+  }, []);
 
   const usernameValid = /^[a-zA-Z0-9_.]{3,20}$/.test(username);
   const passwordValid = password.length >= MIN_PASSWORD;
